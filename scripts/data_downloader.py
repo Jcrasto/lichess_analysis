@@ -18,7 +18,7 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     # body = resp.content.decode("utf-8")
     # body = body.split("\n")
 
-    body = open("../data/lichess_luckleland_2022-04-04.pgn", 'r')
+    body = open("/app/data/lichess_luckleland_2022-04-04.pgn", 'r')
     new_game = True
     games_list = []
     for line in body:
