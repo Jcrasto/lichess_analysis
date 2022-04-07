@@ -13,12 +13,12 @@ def athena_query_to_df(query):
             'OutputLocation': query_output_bucket
         }
     )
-    response_key = response['QueryExecutionID'] + ".csv"
+    response_key = response['QueryExecutionId'] + ".csv"
     s3_client = session.client('s3')
     try:
         waiter = s3_client.get_waiter('object_exists')
-        waiter.wait(Bucket=query_output_bucket.replace("s3://", ""))
-        obj = s3_client.get_object(Bucket=query_output_bucket.replace("s3://", ""), key = response_key)
+        waiter.wait(Bucket=query_output_bucket.replace("s3://", ""),Key=response_key)
+        obj = s3_client.get_object(Bucket=query_output_bucket.replace("s3://", ""), Key=response_key)
         df = pd.read_csv(io.BytesIO(obj['Body'].read()))
     except Exception as e:
         raise(e)
