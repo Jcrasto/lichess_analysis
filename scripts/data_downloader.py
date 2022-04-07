@@ -5,7 +5,7 @@ import pandas as pd
 
 if __name__ == "__main__":
     date_start_formatted = "2021-01-01 00:00:00"
-    date_end_formatted = "2021-01-02 00:00:00"
+    date_end_formatted = "2022-04-01 00:00:00"
 
     date_start = int(time.mktime(time.strptime(date_start_formatted, "%Y-%m-%d %H:%M:%S"))) * 1000
     date_end = int(time.mktime(time.strptime(date_end_formatted, "%Y-%m-%d %H:%M:%S"))) * 1000
@@ -18,7 +18,7 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     # body = resp.content.decode("utf-8")
     # body = body.split("\n")
 
-    body = open("/app/data/lichess_luckleland_2022-04-04.pgn", 'r')
+    body = open("/app/data/lichess_luckleland_2022-04-07.pgn", 'r')
     new_game = True
     games_list = []
     for line in body:
