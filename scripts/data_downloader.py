@@ -2,8 +2,19 @@ import requests
 from datetime import datetime
 import time
 import pandas as pd
+import logging
+from utils.query_utils import run_athena_query
 
 if __name__ == "__main__":
+
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    log_stream_handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    log_stream_handler.setFormatter(formatter)
+    logger.addHandler(log_stream_handler)
+
+
     date_start_formatted = "2021-01-01 00:00:00"
     date_end_formatted = "2022-04-01 00:00:00"
 
@@ -41,3 +52,5 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     game_data["id_key"] = game_data["utcdate"].str.replace(".", "") + game_data['utctime'].str.replace(":", "")
     game_data["date"] = game_data["date"].str.replace(".", "-")
     game_data.to_parquet("s3://jcrasto-chess-analysis/lichess_api_data", partition_cols=["date"], index=False)
+    run_athena_query("""MSCK REPAIR TABLE lichess.lichess_api_data""")
+

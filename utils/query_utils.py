@@ -2,6 +2,17 @@ import io
 import pandas as pd
 import boto3
 
+def run_athena_query(query):
+    session = boto3.Session()
+    query_output_bucket = "s3://query-results-737934178320"
+    athena_client = session.client("athena", region_name='us-east-1')
+    response = athena_client.start_query_execution(
+        QueryString=query,
+        ResultConfiguration={
+            'OutputLocation': query_output_bucket
+        }
+    )
+    return response
 
 def athena_query_to_df(query):
     session = boto3.Session()
