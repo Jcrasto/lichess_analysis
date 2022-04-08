@@ -30,9 +30,6 @@ if __name__ == "__main__":
     query_output_bucket = "s3://query-results-737934178320"
     athena_client = session.client("athena", region_name='us-east-1')
 
-    # date_start_formatted = "2021-01-01 00:00:00"
-    # date_end_formatted = "2022-04-01 00:00:00"
-
     date_start = int(start_date.strftime("%s")) * 1000
     date_end = int(end_date.strftime("%s")) * 1000
 
@@ -41,11 +38,11 @@ if __name__ == "__main__":
 tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_END}"
     api_url = api_url.format(DATE_START=str(date_start), DATE_END=str(date_end))
 
-    # resp = requests.get(api_url)
-    # body = resp.content.decode("utf-8")
-    # body = body.split("\n")
+    resp = requests.get(api_url)
+    body = resp.content.decode("utf-8")
+    body = body.split("\n")
 
-    body = open("data/lichess_luckleland_2022-04-07.pgn", 'r')
+    # body = open("data/lichess_luckleland_2022-04-07.pgn", 'r')
     new_game = True
     games_list = []
     for line in body:
@@ -65,11 +62,11 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
             games_list.append(game_dict)
             new_game = True
     game_data = pd.DataFrame.from_dict(games_list)
-    game_data["id_key"] = game_data["utcdate"].str.replace(".", "") + game_data['utctime'].str.replace(":", "")
-    game_data["date"] = game_data["date"].str.replace(".", "-")
+    game_data["id_key"] = game_data["utcdate"].str.replace(".", "") + game_data['utctime'].str.replace(":", "", regex=False)
+    game_data["date"] = game_data["date"].str.replace(".", "-",regex=False)
     for date in game_data['date'].unique():
         delete_objects_by_partition_value(logger,s3_client, "date", date)
         response = run_athena_query(athena_client, f"ALTER TABLE lichess.lichess_api_data DROP PARTITION (date='{date}')")
         logger.info(response)
-    # game_data.to_parquet("s3://jcrasto-chess-analysis/lichess_api_data", partition_cols=["date"], index=False)
-    # run_athena_query("""MSCK REPAIR TABLE lichess.lichess_api_data""")
+    game_data.to_parquet("s3://jcrasto-chess-analysis/lichess_api_data/", partition_cols=["date"], index=False)
+    run_athena_query(athena_client,"""MSCK REPAIR TABLE lichess.lichess_api_data""")
