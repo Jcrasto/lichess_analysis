@@ -33,7 +33,6 @@ if __name__ == "__main__":
     date_start = int(start_date.strftime("%s")) * 1000
     date_end = int(end_date.strftime("%s")) * 1000
 
-
     api_url = "https://lichess.org/api/games/user/luckleland?\
 tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_END}"
     api_url = api_url.format(DATE_START=str(date_start), DATE_END=str(date_end))
@@ -42,7 +41,6 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     body = resp.content.decode("utf-8")
     body = body.split("\n")
 
-    # body = open("data/lichess_luckleland_2022-04-07.pgn", 'r')
     new_game = True
     games_list = []
     for line in body:
@@ -62,11 +60,28 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
             games_list.append(game_dict)
             new_game = True
     game_data = pd.DataFrame.from_dict(games_list)
-    game_data["id_key"] = game_data["utcdate"].str.replace(".", "") + game_data['utctime'].str.replace(":", "", regex=False)
-    game_data["date"] = game_data["date"].str.replace(".", "-",regex=False)
+    game_data["id_key"] = game_data["utcdate"].str.replace(".", "") + game_data['utctime'].str.replace(":", "",
+                                                                                                       regex=False)
+    game_data["date"] = game_data["date"].str.replace(".", "-", regex=False)
+
+    drop_partition_query = "ALTER TABLE lichess.lichess_api_data DROP "
+    add_partition_query = "ALTER TABLE lichess.lichess_api_data ADD\n"
+
     for date in game_data['date'].unique():
-        delete_objects_by_partition_value(logger,s3_client, "date", date)
-        response = run_athena_query(athena_client, f"ALTER TABLE lichess.lichess_api_data DROP PARTITION (date='{date}')")
-        logger.info(response)
+        delete_objects_by_partition_value(logger, s3_client, "date", date)
+        drop_partition_query += "PARTITION (date='{DATE}'),".format(DATE=date)
+        add_partition_query += "PARTITION (date = '{DATE}') LOCATION 's3://jcrasto-chess-analysis/lichess_api_data/date={DATE}'\n".format(
+            DATE=date)
+    drop_partition_query = drop_partition_query[:-1] + ';'
+    add_partition_query = add_partition_query[:-1] + ';'
+
+    logger.info("running query : " + drop_partition_query)
+    response = run_athena_query(athena_client, drop_partition_query)
+    logger.info(response)
+
     game_data.to_parquet("s3://jcrasto-chess-analysis/lichess_api_data/", partition_cols=["date"], index=False)
-    run_athena_query(athena_client,"""MSCK REPAIR TABLE lichess.lichess_api_data""")
+
+    logger.info("running query : " + add_partition_query)
+    response = run_athena_query(athena_client, add_partition_query)
+    logger.info(response)
+
