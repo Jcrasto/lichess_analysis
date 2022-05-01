@@ -3,3 +3,4 @@ pandas
 fastparquet
 pyarrow
 s3fs
+boto3
