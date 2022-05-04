@@ -1,12 +1,39 @@
 import requests
 from datetime import datetime, date, timedelta
-import time
 import boto3
 import pandas as pd
 import logging
-from utils.partition_handler import delete_objects_by_partition_value
-from utils.query_utils import run_athena_query
 import argparse
+import re
+
+def delete_objects_by_partition_value(logger, s3_client, partition_col, value):
+    bucket = "jcrasto-chess-analysis"
+    prefix = "lichess_api_data/"
+    paginator = s3_client.get_paginator('list_objects_v2')
+    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
+    delete_string = partition_col + "=" + value
+
+    if not pages:
+        logger.info("no objects found")
+
+    for page in pages:
+        if page.get('Contents', None):
+            for obj in page['Contents']:
+                if re.search(delete_string, obj['Key']):
+                    response = s3_client.delete_object(Bucket=bucket, Key=obj['Key'])
+                    logger.info("delete_object response: " + str(response['ResponseMetadata']))
+    return
+
+
+def run_athena_query(athena_client, query):
+    query_output_bucket = "s3://query-results-737934178320"
+    response = athena_client.start_query_execution(
+        QueryString=query,
+        ResultConfiguration={
+            'OutputLocation': query_output_bucket
+        }
+    )
+    return response
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
