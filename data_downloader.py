@@ -65,7 +65,7 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     game_data["date"] = game_data["date"].str.replace(".", "-", regex=False)
 
     drop_partition_query = "ALTER TABLE lichess.lichess_api_data DROP "
-    add_partition_query = "ALTER TABLE lichess.lichess_api_data ADD\n"
+    add_partition_query = "ALTER TABLE lichess.lichess_api_data ADD IF NOT EXISTS\n"
 
     for date in game_data['date'].unique():
         delete_objects_by_partition_value(logger, s3_client, "date", date)
