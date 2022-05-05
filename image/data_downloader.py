@@ -92,12 +92,12 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     game_data["date"] = game_data["date"].str.replace(".", "-", regex=False)
 
     drop_partition_query = "ALTER TABLE lichess.lichess_api_data DROP "
-    add_partition_query = "ALTER TABLE lichess.lichess_api_data ADD IF NOT EXISTS\n"
+    add_partition_query = "ALTER TABLE lichess.lichess_api_data ADD IF NOT EXISTS "
 
     for date in game_data['date'].unique():
         delete_objects_by_partition_value(logger, s3_client, "date", date)
         drop_partition_query += "PARTITION (date='{DATE}'),".format(DATE=date)
-        add_partition_query += "PARTITION (date = '{DATE}') LOCATION 's3://jcrasto-chess-analysis/lichess_api_data/date={DATE}'\n".format(
+        add_partition_query += "PARTITION (date = '{DATE}') LOCATION 's3://jcrasto-chess-analysis/lichess_api_data/date={DATE}' ".format(
             DATE=date)
     drop_partition_query = drop_partition_query[:-1] + ';'
     add_partition_query = add_partition_query[:-1] + ';'
