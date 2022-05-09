@@ -5,6 +5,8 @@ import pandas as pd
 import logging
 import argparse
 import re
+import sys
+import time
 
 def delete_objects_by_partition_value(logger, s3_client, partition_col, value):
     bucket = "jcrasto-chess-analysis"
@@ -112,3 +114,14 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     response = run_athena_query(athena_client, add_partition_query)
     logger.info(response)
 
+    logger.info("running query : " + "MSCK REPAIR TABLE lichess.lichess_api_data")
+    response = run_athena_query(athena_client, "MSCK REPAIR TABLE lichess.lichess_api_data")
+    logger.info(response)
+
+    sleep_interval= 100
+    logger.info(f"sleeping for {str(sleep_interval)} seconds")
+    time.sleep(sleep_interval)
+    logger.info("Process complete, exiting")
+
+
+    sys.exit(0)
