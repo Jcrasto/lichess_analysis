@@ -104,9 +104,9 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     drop_partition_query = drop_partition_query[:-1] + ';'
     add_partition_query = add_partition_query[:-1] + ';'
 
-    logger.info("running query : " + drop_partition_query)
-    response = run_athena_query(athena_client, drop_partition_query)
-    logger.info(response)
+    # logger.info("running query : " + drop_partition_query)
+    # response = run_athena_query(athena_client, drop_partition_query)
+    # logger.info(response)
 
     game_data.to_parquet("s3://jcrasto-chess-analysis/lichess_api_data/", partition_cols=["date"], index=False)
 
