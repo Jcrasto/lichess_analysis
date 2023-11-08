@@ -8,6 +8,7 @@ import re
 import sys
 import time
 
+
 def delete_objects_by_partition_value(logger, s3_client, partition_col, value):
     bucket = "jcrasto-chess-analysis"
     prefix = "lichess_api_data/"
@@ -36,6 +37,7 @@ def run_athena_query(athena_client, query):
         }
     )
     return response
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -118,10 +120,9 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     response = run_athena_query(athena_client, "MSCK REPAIR TABLE lichess.lichess_api_data")
     logger.info(response)
 
-    sleep_interval= 100
+    sleep_interval = 100
     logger.info(f"sleeping for {str(sleep_interval)} seconds")
     time.sleep(sleep_interval)
     logger.info("Process complete, exiting")
-
 
     sys.exit(0)
