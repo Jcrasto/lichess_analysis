@@ -20,17 +20,17 @@ def pgn_parser(row):
         if next_move_string not in game_string:
             last_move = True
             move_list = game_string[game_string.index(move_string) + len(move_string):].split()
-            game_dicts.append({"id_key": id_key, "date": date, "move_number": move_string[:-1] + "w",
+            game_dicts.append({"id_key": id_key, "date": date, "move_number": move_number, "move": 0,
                                "pgn_string": running_game_str + move_list[0]})
             if move_list[1] != '0-1' and move_list[1] != '1-0' and move_list[1] != '1/2-1/2':
-                game_dicts.append({"id_key": id_key, "date": date, "move_number": move_string[:-1] + "b",
+                game_dicts.append({"id_key": id_key, "date": date, "move_number": move_number, "move": 1,
                                    "pgn_string": running_game_str + " ".join(move_list[:-1])})
         else:
             move_list = game_string[
                         game_string.index(move_string) + len(move_string):game_string.index(next_move_string)].split()
-            game_dicts.append({"id_key": id_key, "date": date, "move_number": move_string[:-1] + "w",
+            game_dicts.append({"id_key": id_key, "date": date, "move_number": move_number, "move": 0,
                                "pgn_string": running_game_str + move_list[0]})
-            game_dicts.append({"id_key": id_key, "date": date, "move_number": move_string[:-1] + "b",
+            game_dicts.append({"id_key": id_key, "date": date, "move_number": move_number, "move": 1,
                                "pgn_string": running_game_str + " ".join(move_list)})
             move_number += 1
     return pd.DataFrame(game_dicts)
@@ -52,4 +52,7 @@ if __name__ == "__main__":
     result = games_df.apply(pgn_parser, axis=1)
     combined_df = pd.concat(result.to_list(), ignore_index=True)
     logging.info("new dataframe with running gamestring has shape: " + str(combined_df.shape))
-    combined_df.to_parquet("s3://jcrasto-chess-analysis/running_gamestrings/", partition_cols=["date"], index=False)
+    s3_location = "s3://jcrasto-chess-analysis/running_gamestrings/"
+    logging.info("writing parquet data to: " + s3_location)
+    combined_df.to_parquet(s3_location, partition_cols=["date"], index=False)
+    logging.info("process completed")

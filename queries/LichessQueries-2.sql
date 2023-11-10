@@ -13,7 +13,13 @@ order by date desc, utctime desc
 
 
 create view lichess.luckleland_results  as( 
-select "date", white, black, "result", 1 as count,
+select "date", white, black, "result",
+case
+	when white = 'luckleland' then 'white'
+	when black = 'luckleland' then 'black'
+	else null
+end as "luckleland",
+1 as count,
 case
 	when white = 'luckleland' and result = '1-0' then 1
 	when black = 'luckleland' and result = '0-1' then 1
@@ -44,8 +50,10 @@ group by date
 order by date desc
 
 
-SELECT
-    a.pgn_string,
+
+select
+	a.pgn_string,
+    b.luckleland,
     SUM(b.count) AS total_games,
     cast(SUM(b.win) as double)/ cast(SUM(b.count)as double) AS win,
     cast(SUM(b.loss) as double) / cast(SUM(b.count) as double) AS loss,
@@ -58,18 +66,31 @@ ON
     a.id_key = b.id_key
 WHERE
     a.date >= '2023-01-01'
-    AND a.move_number = '1b'
-GROUP BY
-    a.pgn_string
+GROUP by
+	a.move_number,
+	a.move,
+	a.pgn_string,
+    b.luckleland
+having SUM(b.count) >= 5
+and cast(SUM(b.loss) as double) / cast(SUM(b.count) as double) >= 0.75
 ORDER BY
-    loss DESC;
+a.move_number ,
+a.move,
+loss DESC;
    
  
- select count()
    
- select move_number, count(distinct pgn_string)
+ select move_number, move, count(distinct pgn_string) "pgn_strings"
  from lichess.running_gamestrings 
- group by move_number 
- order by move_number 
+ group by move_number, move
+ order by move_number, move
  
  
+show create table lichess.running_gamestrings 
+
+
+select * 
+from lichess.luckleland_results 
+order by date desc
+
+
