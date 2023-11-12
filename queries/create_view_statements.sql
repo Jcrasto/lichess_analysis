@@ -1,18 +1,4 @@
-select * from lichess.lichess_api_data 
-where "date" >= '2022-07-01'
-order by gamestring desc 
-
-
-select utcdate || ' ' || utctime "date_time",
-case
-	when white = 'luckleland' then whiteelo 
-	when black = 'luckleland' then blackelo 
-end as "elo"
-from lichess.lichess_api_data 
-order by date desc, utctime desc 
-
-
-create view lichess.luckleland_results  as( 
+create view lichess.luckleland_results  as(
 select "date", white, black, "result",
 case
 	when white = 'luckleland' then 'white'
@@ -38,19 +24,8 @@ from lichess.lichess_api_data
 )
 
 
-select *  
-from lichess.luckleland_results 
-where date >= '2023-06-01'
-order by date desc
 
-select date, sum(count) "count", sum(win)"win", sum(loss)"loss", sum(draw) "draw"
-from lichess.luckleland_results 
-where date >= '2023-06-01'
-group by date
-order by date desc
-
-
-
+create view lichess.gamestring_results as(
 select
 	a.pgn_string,
     b.luckleland,
@@ -64,33 +39,16 @@ LEFT JOIN
     lichess.luckleland_results b
 ON
     a.id_key = b.id_key
-WHERE
-    a.date >= '2023-01-01'
 GROUP by
 	a.move_number,
 	a.move,
 	a.pgn_string,
     b.luckleland
 having SUM(b.count) >= 5
-and cast(SUM(b.loss) as double) / cast(SUM(b.count) as double) >= 0.75
 ORDER BY
 a.move_number ,
 a.move,
-loss DESC;
-   
- 
-   
- select move_number, move, count(distinct pgn_string) "pgn_strings"
- from lichess.running_gamestrings 
- group by move_number, move
- order by move_number, move
- 
- 
-show create table lichess.running_gamestrings 
-
-
-select * 
-from lichess.luckleland_results 
-order by date desc
+loss DESC
+) 
 
 
