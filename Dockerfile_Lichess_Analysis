@@ -2,8 +2,9 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-COPY data_downloader_image/requirements.txt requirements.txt
+COPY requirements.txt requirements.txt
 RUN pip3 install -r requirements.txt
 
-COPY source/data_downloader.py data_downloader.py
+COPY source/ source/
+WORKDIR /app/source/
 CMD ["python", "data_downloader.py"]

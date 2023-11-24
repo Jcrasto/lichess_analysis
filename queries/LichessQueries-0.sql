@@ -7,3 +7,7 @@ select pgn_string
 from lichess.running_gamestrings 
 where move_number =20
 and move = 1
+
+
+select * from lichess.lichess_api_data 
+order by date desc
