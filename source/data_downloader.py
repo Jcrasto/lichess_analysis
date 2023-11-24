@@ -4,40 +4,10 @@ import boto3
 import pandas as pd
 import logging
 import argparse
-import re
 import sys
 import time
-
-
-def delete_objects_by_partition_value(logger, s3_client, partition_col, value):
-    bucket = "jcrasto-chess-analysis"
-    prefix = "lichess_api_data/"
-    paginator = s3_client.get_paginator('list_objects_v2')
-    pages = paginator.paginate(Bucket=bucket, Prefix=prefix)
-    delete_string = partition_col + "=" + value
-
-    if not pages:
-        logger.info("no objects found")
-
-    for page in pages:
-        if page.get('Contents', None):
-            for obj in page['Contents']:
-                if re.search(delete_string, obj['Key']):
-                    response = s3_client.delete_object(Bucket=bucket, Key=obj['Key'])
-                    logger.info("delete_object response: " + str(response['ResponseMetadata']))
-    return
-
-
-def run_athena_query(athena_client, query):
-    query_output_bucket = "s3://query-results-737934178320"
-    response = athena_client.start_query_execution(
-        QueryString=query,
-        ResultConfiguration={
-            'OutputLocation': query_output_bucket
-        }
-    )
-    return response
-
+from utils.query_utils import run_athena_query
+from utils.s3_utils import delete_objects_by_partition_value
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -98,26 +68,28 @@ tags=true&clocks=false&evals=false&opening=false&since={DATE_START}&until={DATE_
     drop_partition_query = "ALTER TABLE lichess.lichess_api_data DROP "
     add_partition_query = "ALTER TABLE lichess.lichess_api_data ADD IF NOT EXISTS "
 
+    bucket = "jcrasto-chess-analysis"
+    prefix = "lichess_api_data/"
+
     for date in game_data['date'].unique():
-        delete_objects_by_partition_value(logger, s3_client, "date", date)
+        delete_objects_by_partition_value(bucket, prefix, "date", date)
         drop_partition_query += "PARTITION (date='{DATE}'),".format(DATE=date)
         add_partition_query += "PARTITION (date = '{DATE}') LOCATION 's3://jcrasto-chess-analysis/lichess_api_data/date={DATE}' ".format(
             DATE=date)
     drop_partition_query = drop_partition_query[:-1] + ';'
     add_partition_query = add_partition_query[:-1] + ';'
 
-    # logger.info("running query : " + drop_partition_query)
     # response = run_athena_query(athena_client, drop_partition_query)
     # logger.info(response)
 
+    logger.info("Writing dataframe to s3://jcrasto-chess-analysis/lichess_api_data/ as parquet")
     game_data.to_parquet("s3://jcrasto-chess-analysis/lichess_api_data/", partition_cols=["date"], index=False)
+    logger.info("Dataframe to s3 write completed")
 
-    logger.info("running query : " + add_partition_query)
-    response = run_athena_query(athena_client, add_partition_query)
+    response = run_athena_query(add_partition_query)
     logger.info(response)
 
-    logger.info("running query : " + "MSCK REPAIR TABLE lichess.lichess_api_data")
-    response = run_athena_query(athena_client, "MSCK REPAIR TABLE lichess.lichess_api_data")
+    response = run_athena_query("MSCK REPAIR TABLE lichess.lichess_api_data")
     logger.info(response)
 
     sleep_interval = 100
