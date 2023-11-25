@@ -9,5 +9,9 @@ where move_number =20
 and move = 1
 
 
-select * from lichess.lichess_api_data 
-order by date desc
+select "date", gamestring, id_key
+from lichess.lichess_api_data
+where date >= '2023-11-01'
+and date <= '2023-11-03'
+order by "date" desc
+
