@@ -135,7 +135,6 @@ async def refresh_user_data(req: RefreshRequest):
     """Fetch games from Lichess API and write to exported_data/user_data."""
     params = {
         "max": req.max,
-        "evals": "true",
         "opening": "true",
         "clocks": "true",
         "moves": "true",

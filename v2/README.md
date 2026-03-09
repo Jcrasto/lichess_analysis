@@ -5,41 +5,59 @@ A local app for browsing your Lichess games, backed by the Lichess API.
 ## Project Structure
 
 ```
-lichess-app/
-├── backend/           # FastAPI server
+v2/
+├── backend/                  # FastAPI server (Python)
 │   ├── main.py
-│   └── requirements.txt
-├── frontend/          # React + Vite UI
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── components/
-│   │   │   ├── GameList.jsx
-│   │   │   ├── RefreshModal.jsx
-│   │   │   └── GameDetail.jsx
-│   └── package.json
+│   └── pyproject.toml
+├── frontend/                 # React + Vite UI
+│   ├── index.html
+│   ├── vite.config.js
+│   ├── package.json
+│   └── src/
+│       ├── main.jsx
+│       ├── App.jsx
+│       ├── App.css
+│       └── components/
+│           ├── GameList.jsx
+│           ├── RefreshModal.jsx
+│           └── GameDetail.jsx
 └── exported_data/
-    └── user_data/     # JSON files per user, written by the backend
+    └── user_data/            # JSON files per user, written by the backend
 ```
 
 ## Setup & Running
+
+### Prerequisites
+
+- **Python**: [uv](https://docs.astral.sh/uv/) (manages the venv automatically)
+- **Node**: v18+ with npm
+
+---
 
 ### Backend (FastAPI)
 
 ```bash
 cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8000
 ```
+
+Runs at `http://localhost:8000`. The `--reload` flag auto-restarts on file changes.
+
+> First run: `uv` will create a `.venv` and install dependencies from `pyproject.toml` automatically.
+
+---
 
 ### Frontend (React + Vite)
 
 ```bash
 cd frontend
-npm install
+npm install       # first time only
 npm run dev
 ```
 
-Then open http://localhost:3000
+Runs at `http://localhost:3000`. API calls to `/api/*` are proxied to the backend automatically.
+
+---
 
 ## How it works
 
@@ -70,16 +88,9 @@ Each user's games are stored in `exported_data/user_data/{username}.json`:
   "games": [
     {
       "pgn": "...",
-      "headers": { "White": "...", "Black": "...", ... },
+      "headers": { "White": "...", "Black": "...", "Result": "...", "Date": "..." },
       "moves": "1. e4 e5 2. ..."
     }
   ]
 }
 ```
-
-
-# Commands
-* uv run uvicorn main:app --reload --port 8000
-* [ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh"
-* npm install
-* npm run dev
