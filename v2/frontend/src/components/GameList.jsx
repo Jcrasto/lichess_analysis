@@ -13,7 +13,7 @@ function getColor(username, white) {
   return white?.toLowerCase() === username?.toLowerCase() ? 'white' : 'black'
 }
 
-export default function GameList({ games, username, loading, onSelect }) {
+export default function GameList({ games, username, loading, onSelect, bookmarks = new Set() }) {
   if (loading) {
     return (
       <div className="game-list-loading">
@@ -25,16 +25,15 @@ export default function GameList({ games, username, loading, onSelect }) {
   return (
     <div className="game-list">
       {games.map((game, i) => {
-        const h = game.headers || {}
-        const color = getColor(username, h.White)
-        const r = getResult(h.Result, username, h.White, h.Black)
-        const opponent = color === 'white' ? h.Black : h.White
-        const opponentElo = color === 'white' ? h.BlackElo : h.WhiteElo
-        const eventShort = (h.Event || '').replace(/^Rated /, '').replace(/ game$/, '')
+        const color = getColor(username, game.white)
+        const r = getResult(game.result, username, game.white, game.black)
+        const opponent = color === 'white' ? game.black : game.white
+        const opponentElo = color === 'white' ? game.black_elo : game.white_elo
+        const eventShort = (game.event || '').replace(/^Rated /, '').replace(/ game$/, '')
 
         return (
-          <div key={i} className="game-row" onClick={() => onSelect(game)}>
-            <div className={`color-pip ${color}`} title={`Played as ${color}`} />
+          <div key={game.game_id || i} className="game-row" onClick={() => onSelect(game)}>
+            <div className={`color-badge ${color}`}>{color === 'white' ? 'W' : 'B'}</div>
             <div className="game-result-col">
               <span className={`result-badge ${r.cls}`}>{r.text}</span>
             </div>
@@ -46,13 +45,15 @@ export default function GameList({ games, username, loading, onSelect }) {
             </div>
             <div className="game-type-col">
               <span className="game-type">{eventShort}</span>
-              {h.ECO && h.ECO !== '?' && <span className="game-eco">{h.ECO}</span>}
+              {game.eco && game.eco !== '?' && <span className="game-eco">{game.eco}</span>}
             </div>
             <div className="game-opening-col">
-              <span className="game-opening">{h.Opening || ''}</span>
+              <span className="game-opening">{game.opening || ''}</span>
             </div>
             <div className="game-date-col">
-              <span className="game-date">{(h.Date || '').replace(/\.\?\?$/, '')}</span>
+              {bookmarks.has(game.game_id) && <span className="bookmark-star" title="Bookmarked on Lichess">★</span>}
+              {game.has_eval && <span className="eval-dot" title="Has engine evaluation">⚡</span>}
+              <span className="game-date">{(game.date || '').replace(/\.\?\?$/, '')}</span>
             </div>
           </div>
         )

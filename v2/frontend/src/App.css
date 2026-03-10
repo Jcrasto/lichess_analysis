@@ -44,6 +44,23 @@ body {
   border-bottom: 1px solid #2d2d2d;
 }
 
+.logo-text {
+  flex: 1;
+}
+
+.btn-gear {
+  background: none;
+  border: none;
+  color: #555;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.btn-gear:hover { color: #d9d9d9; }
+
 .logo-icon {
   font-size: 28px;
   line-height: 1;
@@ -167,10 +184,92 @@ body {
   color: #555;
 }
 
+.filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.btn-clear-filters {
+  background: none;
+  border: none;
+  color: #629924;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.btn-clear-filters:hover { color: #8bc34a; }
+
 .filter-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.date-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.date-input {
+  flex: 1;
+  min-width: 0;
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #d9d9d9;
+  padding: 6px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  color-scheme: dark;
+}
+
+.date-input:focus { border-color: #6a9955; }
+
+.date-sep {
+  font-size: 12px;
+  color: #555;
+  flex-shrink: 0;
+}
+
+.btn-bookmark-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #888;
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  width: 100%;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+
+.btn-bookmark-filter:hover { border-color: #c9a227; color: #d9d9d9; }
+
+.btn-bookmark-filter.active {
+  background: #2a2410;
+  border-color: #c9a227;
+  color: #c9a227;
+}
+
+.bookmark-count {
+  font-size: 10px;
+  background: #3a3010;
+  color: #c9a227;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 600;
 }
 
 .sidebar-spacer { flex: 1; }
@@ -194,6 +293,27 @@ body {
 }
 
 .btn-refresh:hover { background: #363636; border-color: #629924; color: #d9d9d9; }
+
+.btn-eval {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #1e2e1a;
+  border: 1px solid #629924;
+  color: #8bc34a;
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-eval:hover:not(:disabled) { background: #243822; border-color: #8bc34a; }
+.btn-eval:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .last-updated {
   font-size: 11px;

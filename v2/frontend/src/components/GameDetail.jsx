@@ -10,25 +10,60 @@ function HeaderRow({ label, value }) {
   )
 }
 
+function injectEvals(movesStr, evals) {
+  if (!evals || evals.length === 0) return movesStr
+  // Build map from ply (1-based) to eval string
+  const evalMap = {}
+  for (const e of evals) {
+    let evalStr
+    if (e.mate_in !== null && e.mate_in !== undefined) {
+      evalStr = `#${e.mate_in}`
+    } else if (e.cp_score !== null && e.cp_score !== undefined) {
+      evalStr = e.cp_score.toFixed(2)
+    }
+    if (evalStr) evalMap[e.move_number] = evalStr
+  }
+
+  // Tokenize moves and inject {[%eval ...]} after each move
+  const tokens = movesStr.match(/(\d+\.)|(\.\.\.)|(\{[^}]*\})|([^\s]+)/g) || []
+  const out = []
+  let ply = 0
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    out.push(t)
+    if (/^\d+\.$/.test(t) || /^\.\.\.$/.test(t)) continue
+    if (['1-0', '0-1', '1/2-1/2', '*'].includes(t)) continue
+    if (t.startsWith('{')) continue
+    // It's a move token
+    ply++
+    const ev = evalMap[ply]
+    if (ev) {
+      // Only inject if next token is not already a comment
+      const next = tokens[i + 1] || ''
+      if (!next.startsWith('{')) {
+        out.push(`{[%eval ${ev}]}`)
+      }
+    }
+  }
+  return out.join(' ')
+}
+
 function formatMoves(movesStr) {
   if (!movesStr) return []
-  // Split into tokens: move numbers, moves, comments, result
   const tokens = movesStr.match(/(\d+\.)|(\.\.\.)|(\{[^}]*\})|([^\s]+)/g) || []
   const moves = []
   let i = 0
   while (i < tokens.length) {
     const t = tokens[i]
     if (/^\d+\.$/.test(t)) {
-      // Move number
       const num = parseInt(t)
       const white = tokens[i + 1] || ''
       const whiteComment = (tokens[i + 2] || '').startsWith('{') ? tokens[i + 2] : null
       i += whiteComment ? 3 : 2
 
-      // Check for black move
       let black = ''
       let blackComment = null
-      if (i < tokens.length && !/^\d+/.test(tokens[i]) && !['1-0','0-1','1/2-1/2','*'].includes(tokens[i])) {
+      if (i < tokens.length && !/^\d+/.test(tokens[i]) && !['1-0', '0-1', '1/2-1/2', '*'].includes(tokens[i])) {
         black = tokens[i]
         i++
         if (i < tokens.length && (tokens[i] || '').startsWith('{')) {
@@ -69,11 +104,11 @@ function evalColor(ev) {
   return 'eval-neutral'
 }
 
-export default function GameDetail({ game, username, onClose }) {
-  const h = game.headers || {}
-  const moves = formatMoves(game.moves)
-  const isWhite = h.White?.toLowerCase() === username?.toLowerCase()
-  const lichessId = (h.Site || '').split('/').pop()
+export default function GameDetail({ game, username, evals, onClose }) {
+  const movesWithEvals = injectEvals(game.moves, evals)
+  const moves = formatMoves(movesWithEvals)
+  const isWhite = game.white?.toLowerCase() === username?.toLowerCase()
+  const lichessId = game.game_id
 
   return (
     <div className="detail-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -81,12 +116,12 @@ export default function GameDetail({ game, username, onClose }) {
         <div className="detail-header">
           <div>
             <div className="detail-players">
-              <span className="dp white-p">{h.White} <em>({h.WhiteElo})</em></span>
+              <span className="dp white-p">{game.white} <em>({game.white_elo})</em></span>
               <span className="dp-vs">vs</span>
-              <span className="dp black-p">{h.Black} <em>({h.BlackElo})</em></span>
+              <span className="dp black-p">{game.black} <em>({game.black_elo})</em></span>
             </div>
             <div className="detail-meta">
-              {h.Event} · {h.Date} · {h.Result}
+              {game.event} · {game.date} · {game.result}
             </div>
           </div>
           <div className="detail-header-actions">
@@ -109,18 +144,16 @@ export default function GameDetail({ game, username, onClose }) {
             <div className="detail-info">
               <div className="info-section">
                 <div className="info-title">GAME INFO</div>
-                <HeaderRow label="Opening" value={h.Opening} />
-                <HeaderRow label="ECO" value={h.ECO} />
-                <HeaderRow label="Termination" value={h.Termination} />
-                <HeaderRow label="Time Control" value={h.TimeControl} />
-                <HeaderRow label="Date" value={h.Date} />
-                <HeaderRow label="White Clock" value={h.WhiteClock} />
-                <HeaderRow label="Black Clock" value={h.BlackClock} />
+                <HeaderRow label="Opening" value={game.opening} />
+                <HeaderRow label="ECO" value={game.eco} />
+                <HeaderRow label="Termination" value={game.termination} />
+                <HeaderRow label="Time Control" value={game.time_control} />
+                <HeaderRow label="Date" value={game.date} />
               </div>
             </div>
 
             <div className="moves-pane">
-              <div className="moves-title">MOVES</div>
+              <div className="moves-title">MOVES{evals && evals.length > 0 ? ' (with evals)' : ''}</div>
               <div className="moves-grid">
                 {moves.map((m, i) => (
                   <div key={i} className="move-row">
