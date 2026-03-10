@@ -5,6 +5,7 @@ import GameDetail from './components/GameDetail.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import EvalLogModal from './components/EvalLogModal.jsx'
 import Dashboard from './components/Dashboard.jsx'
+import ReviewQueue from './components/ReviewQueue.jsx'
 import './App.css'
 
 export default function App() {
@@ -511,9 +512,19 @@ export default function App() {
           >
             ◈ ANALYSIS
           </button>
+          <button
+            className={`tab-btn ${activeTab === 'review' ? 'tab-btn--active' : ''}`}
+            onClick={() => setActiveTab('review')}
+          >
+            ♟ REVIEW
+          </button>
         </div>
 
-        {activeTab === 'dashboard' ? (
+        {activeTab === 'review' ? (
+          <div className="dashboard-scroll">
+            <ReviewQueue username={defaultUser} onSelectGame={handleSelectGame} />
+          </div>
+        ) : activeTab === 'dashboard' ? (
           <div className="dashboard-scroll">
             <Dashboard username={defaultUser} onOpeningSelect={handleOpeningSelect} onSliderChange={handleSliderDateChange} />
           </div>

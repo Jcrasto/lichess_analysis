@@ -35,6 +35,8 @@ from storage import (
     query_unique_openings,
     load_bookmarks,
     save_bookmarks,
+    compute_game_eval_summaries,
+    compute_mistake_patterns,
 )
 from etl import parse_pgn_to_games, run_incremental_etl, run_full_etl
 
@@ -240,6 +242,44 @@ def get_analytics(
     until_date: Optional[str] = None,
 ):
     return query_analytics(username, since_date, until_date)
+
+
+# ── Review Queue ──────────────────────────────────────
+
+@app.get("/api/review/{username}")
+def get_review_queue(
+    username: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    sort_by: str = "blunder_count",
+):
+    return compute_game_eval_summaries(
+        username, page=page, page_size=page_size, color=color,
+        outcome=outcome, perf_type=perf_type, since_date=since_date,
+        until_date=until_date, opening=opening, sort_by=sort_by,
+    )
+
+
+@app.get("/api/mistake_patterns/{username}")
+def get_mistake_patterns(
+    username: str,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+):
+    return compute_mistake_patterns(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+    )
 
 
 # ── Refresh ───────────────────────────────────────────

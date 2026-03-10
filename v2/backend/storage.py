@@ -300,6 +300,266 @@ def query_evals_for_game(username: str, game_id: str) -> list:
     return [_serialize_row(dict(zip(cols, row))) for row in rows]
 
 
+def evals_parquet_exists(username: str) -> bool:
+    d = get_evals_dir(username)
+    return d.exists() and any(d.glob("*.parquet"))
+
+
+def compute_game_eval_summaries(
+    username: str,
+    page: int = 1,
+    page_size: int = 50,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    sort_by: str = "blunder_count",
+) -> dict:
+    if not evals_parquet_exists(username):
+        return {"no_evals": True}
+    if not games_parquet_exists(username):
+        return {"no_data": True}
+
+    SORT_COLS = {"blunder_count": "blunder_count", "biggest_drop": "biggest_drop_cp"}
+    sort_col = SORT_COLS.get(sort_by, "blunder_count")
+
+    evals_glob = str(get_evals_dir(username) / "*.parquet")
+    games_glob = str(get_games_dir(username) / "*.parquet")
+    u = username.lower()
+
+    conditions = _build_game_conditions(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        evaluated_only=True,
+    )
+    games_conditions = " AND ".join(conditions) if conditions else "TRUE"
+    offset = (page - 1) * page_size
+
+    sql = f"""
+        WITH evals_raw AS (
+            SELECT game_id, move_number,
+                LEAST(GREATEST(cp_score, -1000), 1000) AS cp_capped,
+                mate_in
+            FROM read_parquet('{evals_glob}')
+            WHERE cp_score IS NOT NULL
+        ),
+        games_filtered AS (
+            SELECT game_id, date, white, black, white_elo, black_elo,
+                   result, opening, perf_type, has_eval
+            FROM read_parquet('{games_glob}')
+            WHERE {games_conditions}
+        ),
+        evals_with_game AS (
+            SELECT e.*, g.white, g.black, g.result
+            FROM evals_raw e
+            JOIN games_filtered g ON e.game_id = g.game_id
+        ),
+        evals_with_prev AS (
+            SELECT *,
+                LAG(cp_capped) OVER (PARTITION BY game_id ORDER BY move_number) AS prev_cp,
+                CASE WHEN lower(white) = '{u}' THEN 1 ELSE 0 END AS is_white
+            FROM evals_with_game
+        ),
+        user_drops AS (
+            SELECT game_id, move_number, cp_capped, prev_cp,
+                CASE
+                    WHEN is_white = 1 AND move_number % 2 = 1 AND prev_cp IS NOT NULL
+                        THEN GREATEST(prev_cp - cp_capped, 0)
+                    WHEN is_white = 0 AND move_number % 2 = 0 AND prev_cp IS NOT NULL
+                        THEN GREATEST(cp_capped - prev_cp, 0)
+                    ELSE NULL
+                END AS user_drop_cp
+            FROM evals_with_prev
+        ),
+        game_summary AS (
+            SELECT
+                game_id,
+                COUNT(CASE WHEN user_drop_cp > 300 THEN 1 END) AS blunder_count,
+                COUNT(CASE WHEN user_drop_cp BETWEEN 150 AND 300 THEN 1 END) AS mistake_count,
+                COUNT(CASE WHEN user_drop_cp BETWEEN 50 AND 150 THEN 1 END) AS inaccuracy_count,
+                MAX(user_drop_cp) AS biggest_drop_cp,
+                MAX_BY(move_number, user_drop_cp) AS critical_move_number
+            FROM user_drops
+            WHERE user_drop_cp IS NOT NULL
+            GROUP BY game_id
+        )
+        SELECT g.game_id, g.date, g.white, g.black, g.white_elo, g.black_elo,
+               g.result, g.opening, g.perf_type,
+               COALESCE(s.blunder_count, 0) AS blunder_count,
+               COALESCE(s.mistake_count, 0) AS mistake_count,
+               COALESCE(s.inaccuracy_count, 0) AS inaccuracy_count,
+               COALESCE(s.biggest_drop_cp, 0) AS biggest_drop_cp,
+               s.critical_move_number
+        FROM games_filtered g
+        LEFT JOIN game_summary s ON g.game_id = s.game_id
+        ORDER BY {sort_col} DESC, g.date DESC
+    """
+
+    con = duckdb.connect()
+    total = con.execute(f"SELECT COUNT(*) FROM ({sql})").fetchone()[0]
+    rows = con.execute(f"{sql} LIMIT {page_size} OFFSET {offset}").fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+
+    games = [_serialize_row(dict(zip(cols, row))) for row in rows]
+    return {"total": total, "page": page, "page_size": page_size, "games": games}
+
+
+def compute_mistake_patterns(
+    username: str,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+) -> dict:
+    if not evals_parquet_exists(username):
+        return {"no_evals": True}
+    if not games_parquet_exists(username):
+        return {"no_data": True}
+
+    evals_glob = str(get_evals_dir(username) / "*.parquet")
+    games_glob = str(get_games_dir(username) / "*.parquet")
+    u = username.lower()
+
+    conditions = _build_game_conditions(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        evaluated_only=True,
+    )
+    games_conditions = " AND ".join(conditions) if conditions else "TRUE"
+
+    base_cte = f"""
+        WITH evals_raw AS (
+            SELECT game_id, move_number,
+                LEAST(GREATEST(cp_score, -1000), 1000) AS cp_capped
+            FROM read_parquet('{evals_glob}')
+            WHERE cp_score IS NOT NULL
+        ),
+        games_filtered AS (
+            SELECT game_id, opening
+            FROM read_parquet('{games_glob}')
+            WHERE {games_conditions}
+        ),
+        evals_with_game AS (
+            SELECT e.game_id, e.move_number, e.cp_capped, g.opening,
+                   lower(w.white) = '{u}' AS is_white_bool,
+                   CASE WHEN lower(w.white) = '{u}' THEN 1 ELSE 0 END AS is_white
+            FROM evals_raw e
+            JOIN games_filtered g ON e.game_id = g.game_id
+            JOIN read_parquet('{games_glob}') w ON e.game_id = w.game_id
+        ),
+        evals_with_prev AS (
+            SELECT *,
+                LAG(cp_capped) OVER (PARTITION BY game_id ORDER BY move_number) AS prev_cp
+            FROM evals_with_game
+        ),
+        user_drops AS (
+            SELECT game_id, move_number, opening,
+                CASE
+                    WHEN is_white = 1 AND move_number % 2 = 1 AND prev_cp IS NOT NULL
+                        THEN GREATEST(prev_cp - cp_capped, 0)
+                    WHEN is_white = 0 AND move_number % 2 = 0 AND prev_cp IS NOT NULL
+                        THEN GREATEST(cp_capped - prev_cp, 0)
+                    ELSE NULL
+                END AS user_drop_cp
+            FROM evals_with_prev
+        ),
+        blunders AS (
+            SELECT * FROM user_drops WHERE user_drop_cp > 300
+        )
+    """
+
+    con = duckdb.connect()
+
+    # Phase distribution
+    phase_rows = con.execute(f"""
+        {base_cte}
+        SELECT
+            CASE
+                WHEN move_number < 20 THEN 'Opening'
+                WHEN move_number <= 60 THEN 'Middlegame'
+                ELSE 'Endgame'
+            END AS phase,
+            COUNT(*) AS blunders
+        FROM blunders
+        GROUP BY phase
+        ORDER BY MIN(move_number)
+    """).fetchall()
+
+    total_blunders_phase = sum(r[1] for r in phase_rows)
+    phase_distribution = [
+        {
+            "phase": r[0],
+            "blunders": r[1],
+            "pct": round(100 * r[1] / total_blunders_phase) if total_blunders_phase else 0,
+        }
+        for r in phase_rows
+    ]
+
+    # Worst openings (blunder rate = blunders / games, min 3 games)
+    opening_rows = con.execute(f"""
+        {base_cte},
+        game_blunders AS (
+            SELECT game_id, opening, COUNT(*) AS blunder_cnt
+            FROM blunders
+            WHERE opening IS NOT NULL AND TRIM(opening) != '' AND opening != '?'
+            GROUP BY game_id, opening
+        ),
+        total_games_per_opening AS (
+            SELECT opening, COUNT(DISTINCT game_id) AS game_count
+            FROM read_parquet('{games_glob}')
+            WHERE ({games_conditions}) AND opening IS NOT NULL AND TRIM(opening) != '' AND opening != '?'
+            GROUP BY opening
+        )
+        SELECT
+            gb.opening,
+            ROUND(SUM(gb.blunder_cnt)::DOUBLE / t.game_count, 2) AS blunder_rate,
+            t.game_count AS games
+        FROM game_blunders gb
+        JOIN total_games_per_opening t ON gb.opening = t.opening
+        WHERE t.game_count >= 3
+        GROUP BY gb.opening, t.game_count
+        ORDER BY blunder_rate DESC
+        LIMIT 10
+    """).fetchall()
+    worst_openings = [
+        {"opening": r[0], "blunder_rate": float(r[1]), "games": int(r[2])}
+        for r in opening_rows
+    ]
+
+    # Summary totals
+    summary_row = con.execute(f"""
+        SELECT COUNT(DISTINCT game_id) AS evaluated_games
+        FROM read_parquet('{games_glob}')
+        WHERE ({games_conditions})
+    """).fetchone()
+    evaluated_games = summary_row[0] if summary_row else 0
+
+    total_blunders_row = con.execute(f"""
+        {base_cte}
+        SELECT COUNT(*) FROM blunders
+    """).fetchone()
+    total_blunders = total_blunders_row[0] if total_blunders_row else 0
+
+    con.close()
+
+    avg_per_game = round(total_blunders / evaluated_games, 2) if evaluated_games else 0.0
+
+    return {
+        "phase_distribution": phase_distribution,
+        "worst_openings": worst_openings,
+        "summary": {
+            "evaluated_games": evaluated_games,
+            "total_blunders": total_blunders,
+            "avg_per_game": avg_per_game,
+        },
+    }
+
+
 def query_unique_openings(username: str) -> list:
     """Return all unique opening names, sorted by frequency descending."""
     if not games_parquet_exists(username):
