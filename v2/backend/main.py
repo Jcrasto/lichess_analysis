@@ -1,0 +1,390 @@
+import asyncio
+import json as _json
+import logging
+import os
+import sys
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Optional
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+import httpx
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+# Ensure backend dir is on sys.path when running from elsewhere
+sys.path.insert(0, os.path.dirname(__file__))
+
+from storage import (
+    load_settings,
+    save_settings,
+    games_parquet_exists,
+    query_games,
+    query_game_by_id,
+    query_last_date,
+    query_unevaluated_count,
+    query_evals_for_game,
+    query_analytics,
+    query_unique_openings,
+    load_bookmarks,
+    save_bookmarks,
+)
+from etl import parse_pgn_to_games, run_incremental_etl, run_full_etl
+
+LICHESS_API = "https://lichess.org/api"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Give the eval runner a reference to this event loop so its background
+    # thread can safely push log lines to SSE subscriber queues.
+    from eval_runner import runner as eval_runner
+    eval_runner.set_loop(asyncio.get_event_loop())
+
+    # Auto-migrate on startup if parquet missing but old JSON exists
+    try:
+        from migrate import migrate_from_json
+        from storage import games_parquet_exists as gpe
+        settings = load_settings()
+        default_user = settings.get("default_user", "luckleland")
+        if not gpe(default_user):
+            migrate_from_json(default_user)
+    except Exception as e:
+        print(f"[startup] Migration skipped or failed: {e}")
+    yield
+
+
+app = FastAPI(title="Lichess Analysis API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Models ────────────────────────────────────────────
+
+class SettingsUpdate(BaseModel):
+    default_user: str
+    lichess_token: Optional[str] = None
+
+
+class RefreshRequest(BaseModel):
+    username: str
+
+
+class EvalRequest(BaseModel):
+    username: str
+    depth: int = 15
+    color: Optional[str] = None
+    outcome: Optional[str] = None
+    perf_type: Optional[str] = None
+    since_date: Optional[str] = None
+    until_date: Optional[str] = None
+    bookmarked_only: bool = False
+    opening: Optional[str] = None
+
+
+# ── Settings ──────────────────────────────────────────
+
+@app.post("/api/settings")
+def update_settings(req: SettingsUpdate):
+    settings = load_settings()
+    settings["default_user"] = req.default_user
+    if req.lichess_token is not None:
+        settings["lichess_token"] = req.lichess_token
+    save_settings(settings)
+    # Never return the token to the client
+    return {"default_user": settings["default_user"], "has_token": bool(settings.get("lichess_token"))}
+
+
+@app.get("/api/settings")
+def get_settings():
+    s = load_settings()
+    return {"default_user": s.get("default_user", "luckleland"), "has_token": bool(s.get("lichess_token"))}
+
+
+# ── Status ────────────────────────────────────────────
+
+@app.get("/api/status/{username}")
+def get_status(username: str):
+    has_data = games_parquet_exists(username)
+    game_count = 0
+    last_date = None
+    unevaluated_count = 0
+
+    if has_data:
+        result = query_games(username, page=1, page_size=1)
+        game_count = result.get("total", 0)
+        last_date_obj = query_last_date(username)
+        last_date = last_date_obj.isoformat() if last_date_obj else None
+        unevaluated_count = query_unevaluated_count(username)
+
+    return {
+        "has_data": has_data,
+        "game_count": game_count,
+        "last_date": last_date,
+        "unevaluated_count": unevaluated_count,
+    }
+
+
+@app.get("/api/last-date/{username}")
+def get_last_date(username: str):
+    d = query_last_date(username)
+    return {"last_date": d.isoformat() if d else None}
+
+
+# ── Games ─────────────────────────────────────────────
+
+@app.get("/api/bookmarks/{username}")
+def get_bookmarks(username: str):
+    return load_bookmarks(username)
+
+
+@app.post("/api/bookmarks/sync")
+async def sync_bookmarks(req: RefreshRequest):
+    settings = load_settings()
+    token = settings.get("lichess_token", "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="No Lichess API token configured. Add one in Settings.")
+
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/x-ndjson"}
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(
+                f"{LICHESS_API}/games/export/bookmarks",
+                params={"moves": "false", "tags": "true"},
+                headers=headers,
+            )
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="Invalid Lichess API token.")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=f"Lichess API error: {resp.text[:200]}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Lichess API timed out")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Network error: {str(e)}")
+
+    import json as _json
+    game_ids = []
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = _json.loads(line)
+            gid = obj.get("id")
+            if gid:
+                game_ids.append(gid)
+        except Exception:
+            pass
+
+    save_bookmarks(req.username, game_ids)
+    return {"synced": len(game_ids)}
+
+
+@app.get("/api/games/{username}")
+def get_games(
+    username: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(100, ge=1, le=500),
+    color: Optional[str] = None,
+    result: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+    evaluated_only: bool = False,
+):
+    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only)
+
+
+@app.get("/api/game/{username}/{game_id}")
+def get_game(username: str, game_id: str):
+    game = query_game_by_id(username, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return game
+
+
+@app.get("/api/evals/{username}/{game_id}")
+def get_evals(username: str, game_id: str):
+    return query_evals_for_game(username, game_id)
+
+
+# ── Openings list ─────────────────────────────────────
+
+@app.get("/api/openings/{username}")
+def get_openings(username: str):
+    return query_unique_openings(username)
+
+
+# ── Analytics ─────────────────────────────────────────
+
+@app.get("/api/analytics/{username}")
+def get_analytics(
+    username: str,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+):
+    return query_analytics(username, since_date, until_date)
+
+
+# ── Refresh ───────────────────────────────────────────
+
+async def _fetch_pgn(username: str, since_ms: Optional[int] = None) -> str:
+    params = {
+        "opening": "true",
+        "moves": "true",
+    }
+    if since_ms is not None:
+        params["since"] = since_ms
+
+    headers = {"Accept": "application/x-chess-pgn"}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.get(
+                f"{LICHESS_API}/games/user/{username}",
+                params=params,
+                headers=headers,
+            )
+        if resp.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"User '{username}' not found on Lichess")
+        if resp.status_code != 200:
+            raise HTTPException(status_code=resp.status_code, detail=f"Lichess API error: {resp.text[:200]}")
+        return resp.text
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Lichess API timed out")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Network error: {str(e)}")
+
+
+@app.post("/api/refresh/incremental")
+async def refresh_incremental(req: RefreshRequest):
+    last_date = query_last_date(req.username)
+    since_ms = None
+    if last_date:
+        from datetime import datetime as dt
+        since_ms = int(dt.combine(last_date, dt.min.time()).timestamp() * 1000)
+
+    pgn_text = await _fetch_pgn(req.username, since_ms=since_ms)
+    games = parse_pgn_to_games(pgn_text)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    result = run_incremental_etl(req.username, games, timestamp)
+    result["fetched"] = len(games)
+    return result
+
+
+@app.post("/api/refresh/full")
+async def refresh_full(req: RefreshRequest):
+    # since Jan 1 2000
+    since_ms = 946684800000
+    pgn_text = await _fetch_pgn(req.username, since_ms=since_ms)
+    games = parse_pgn_to_games(pgn_text)
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    result = run_full_etl(req.username, games, timestamp)
+    result["fetched"] = len(games)
+    return result
+
+
+# ── Evaluation ────────────────────────────────────────
+
+@app.get("/api/evaluate/status/{username}")
+def get_eval_status(username: str):
+    from eval_runner import runner
+    status = runner.get_status()
+    status["unevaluated"] = query_unevaluated_count(username)
+    return status
+
+
+@app.get("/api/evaluate/count/{username}")
+def get_eval_count(
+    username: str,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+):
+    from storage import query_unevaluated_count_filtered
+    count = query_unevaluated_count_filtered(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date,
+        bookmarked_only=bookmarked_only, opening=opening,
+    )
+    return {"count": count}
+
+
+@app.post("/api/evaluate")
+async def start_evaluate(req: EvalRequest):
+    from eval_runner import runner
+    filters = {
+        "color": req.color, "outcome": req.outcome, "perf_type": req.perf_type,
+        "since_date": req.since_date, "until_date": req.until_date,
+        "bookmarked_only": req.bookmarked_only, "opening": req.opening,
+    }
+    try:
+        started = runner.start(req.username, req.depth, filters)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not started:
+        return {"started": False, "message": "Evaluation already running"}
+    return {"started": True}
+
+
+@app.post("/api/evaluate/stop")
+def stop_evaluate():
+    from eval_runner import runner
+    if not runner.is_running:
+        return {"stopped": False, "message": "No evaluation running"}
+    runner.stop()
+    return {"stopped": True}
+
+
+@app.get("/api/evaluate/stream/{username}")
+async def stream_eval_logs(username: str, request: Request):
+    from eval_runner import runner
+
+    async def generate():
+        q = runner.subscribe()
+        # Replay full buffer so a returning client catches up
+        for line in list(runner.log_buffer):
+            yield f"data: {_json.dumps({'log': line})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    line = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {_json.dumps({'log': line})}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            runner.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# ── Health ────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}

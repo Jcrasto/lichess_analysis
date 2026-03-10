@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Single launchd agent that runs supervisord, which manages both
+  the backend and frontend as child processes.
+
+  Install: bash deploy/install.sh
+  Start:   launchctl kickstart gui/$(id -u)/com.joshcrasto.lichess_analysis
+  Stop:    launchctl kill SIGTERM gui/$(id -u)/com.joshcrasto.lichess_analysis
+  Status:  supervisorctl -c deploy/supervisord.conf status
+  Logs:    logs/supervisord.log  logs/backend.log  logs/frontend.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.joshcrasto.lichess_analysis</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/joshcrasto/.local/bin/supervisord</string>
+        <string>--nodaemon</string>
+        <string>--configuration</string>
+        <string>/Users/joshcrasto/Projects/lichess_analysis/v2/deploy/supervisord.conf</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/joshcrasto/Projects/lichess_analysis/v2/logs/supervisord.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/joshcrasto/Projects/lichess_analysis/v2/logs/supervisord.err.log</string>
+
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+</dict>
+</plist>

@@ -1,0 +1,150 @@
+.game-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.game-list-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-size: 14px;
+  padding: 60px;
+}
+
+.game-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 24px;
+  border-bottom: 1px solid #1f1d1b;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.game-row:hover { background: #1e1c1a; }
+
+/* color badge */
+.color-badge {
+  width: 18px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-align: center;
+}
+
+.color-badge.white { color: #d9d9d9; }
+.color-badge.black { color: #666; }
+
+/* result */
+.game-result-col {
+  width: 48px;
+  flex-shrink: 0;
+}
+
+.result-badge {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.result-badge.win  { color: #629924; background: rgba(98, 153, 36, 0.15); }
+.result-badge.loss { color: #e05050; background: rgba(224, 80, 80, 0.15); }
+.result-badge.draw { color: #888;    background: rgba(136, 136, 136, 0.12); }
+
+/* opponent */
+.game-players-col {
+  width: 160px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.player-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #d9d9d9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-elo {
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+}
+
+/* game type */
+.game-type-col {
+  width: 130px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.game-type {
+  font-size: 12px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-eco {
+  font-size: 11px;
+  color: #555;
+  font-family: monospace;
+  flex-shrink: 0;
+}
+
+/* opening */
+.game-opening-col {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.game-opening {
+  font-size: 12px;
+  color: #666;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+/* date */
+.game-date-col {
+  width: 90px;
+  flex-shrink: 0;
+  text-align: right;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.eval-dot {
+  font-size: 10px;
+  opacity: 0.5;
+}
+
+.bookmark-star {
+  font-size: 11px;
+  color: #c9a227;
+  opacity: 0.85;
+}
+
+.game-date {
+  font-size: 11px;
+  color: #555;
+  font-family: monospace;
+}

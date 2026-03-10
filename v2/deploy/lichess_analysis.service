@@ -1,0 +1,24 @@
+# systemd user-level service — runs supervisord, which manages both programs
+# Install: bash deploy/install.sh
+# Start:   systemctl --user start lichess_analysis
+# Stop:    systemctl --user stop lichess_analysis
+# Status:  supervisorctl -c /path/to/deploy/supervisord.conf status
+# Logs:    journalctl --user -u lichess_analysis -f
+#          tail -f logs/backend.log  logs/frontend.log
+
+[Unit]
+Description=Lichess Analysis (supervisord)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/supervisord --nodaemon --configuration /Users/joshcrasto/Projects/lichess_analysis/v2/deploy/supervisord.conf
+ExecStop=/usr/local/bin/supervisorctl --configuration /Users/joshcrasto/Projects/lichess_analysis/v2/deploy/supervisord.conf shutdown
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=append:/Users/joshcrasto/Projects/lichess_analysis/v2/logs/supervisord.log
+StandardError=append:/Users/joshcrasto/Projects/lichess_analysis/v2/logs/supervisord.err.log
+
+[Install]
+# Not included — won't auto-start unless you run: systemctl --user enable lichess_analysis

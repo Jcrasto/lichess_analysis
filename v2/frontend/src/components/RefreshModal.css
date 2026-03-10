@@ -1,0 +1,240 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  background: #1e1c1a;
+  border: 1px solid #3d3d3d;
+  border-radius: 8px;
+  width: 440px;
+  max-width: calc(100vw - 32px);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 20px 16px;
+  border-bottom: 1px solid #2d2d2d;
+}
+
+.modal-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #d9d9d9;
+}
+
+.modal-sub {
+  font-size: 11px;
+  color: #666;
+  margin-top: 3px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.modal-close:hover { color: #d9d9d9; }
+
+.modal-body {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.field-row .field { flex: 1; }
+
+.field-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  color: #666;
+}
+
+.text-input {
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #d9d9d9;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+
+.text-input:focus { border-color: #6a9955; }
+
+.select-input {
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #d9d9d9;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  cursor: pointer;
+}
+
+.select-input:focus { border-color: #6a9955; }
+
+.modal-error {
+  padding: 8px 12px;
+  background: #3a1a1a;
+  border: 1px solid #6b2020;
+  border-radius: 4px;
+  color: #e05050;
+  font-size: 12px;
+}
+
+.modal-result {
+  background: #2a2a2a;
+  border: 1px solid #3d3d3d;
+  border-radius: 4px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.result-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.result-key {
+  font-size: 11px;
+  letter-spacing: 0.8px;
+  color: #666;
+}
+
+.result-val {
+  font-size: 14px;
+  font-weight: 600;
+  color: #d9d9d9;
+}
+
+.result-val.accent { color: #629924; }
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 20px;
+  border-top: 1px solid #2d2d2d;
+}
+
+.btn-ghost {
+  background: none;
+  border: 1px solid #3d3d3d;
+  color: #888;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  letter-spacing: 0.5px;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-ghost:hover { border-color: #666; color: #d9d9d9; }
+
+.btn-primary {
+  background: #629924;
+  color: #fff;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover { background: #538520; }
+.btn-primary:disabled { background: #3d3d3d; color: #555; cursor: not-allowed; }
+
+.spinner-text { letter-spacing: 1px; }
+
+.refresh-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.btn-refresh-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  background: #2d2d2d;
+  border: 1px solid #444;
+  color: #d9d9d9;
+  padding: 14px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-refresh-option:hover:not(:disabled) {
+  background: #363636;
+  border-color: #629924;
+}
+
+.btn-refresh-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-refresh-option.secondary {
+  border-color: #3d3d3d;
+}
+
+.btn-refresh-option.secondary:hover:not(:disabled) {
+  border-color: #888;
+}
+
+.refresh-option-title {
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  font-size: 12px;
+}
+
+.refresh-option-sub {
+  font-size: 11px;
+  color: #666;
+  font-weight: 400;
+}
