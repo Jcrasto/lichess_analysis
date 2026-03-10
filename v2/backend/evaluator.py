@@ -138,45 +138,35 @@ def _evaluate_with_retry(pgn: str, game_id: str, depth: int, max_retries: int = 
     return []
 
 
-def run_evaluation_batch(username: str, batch_size: int = 50, depth: int = 15) -> dict:
-    """Evaluate up to batch_size unevaluated games, newest first. Returns {evaluated, failed, remaining}."""
-    if not games_parquet_exists(username):
-        return {"evaluated": 0, "failed": 0, "remaining": 0}
-
-    import duckdb
-
-    glob_path = str(get_games_dir(username) / "*.parquet")
-    con = duckdb.connect()
-    rows = con.execute(
-        f"""SELECT game_id, pgn, year, month FROM read_parquet('{glob_path}')
-            WHERE has_eval = false
-            ORDER BY date DESC
-            LIMIT {batch_size}"""
-    ).fetchall()
-    con.close()
-
-    if not rows:
-        return {"evaluated": 0, "failed": 0, "remaining": 0}
-
+def _run_eval_loop(username: str, rows: list, depth: int, progress_callback=None, stop_check=None) -> dict:
+    """Core evaluation loop. rows = [(game_id, pgn, year, month, date), ...]"""
     sf_path = get_stockfish_path()
     if not sf_path:
         raise RuntimeError("Stockfish not found")
 
-    total_queued = len(rows)
-    logger.info("Starting evaluation batch: %d games, depth=%d, user=%s (newest first)", total_queued, depth, username)
-
+    total = len(rows)
     evaluated = 0
     failed = 0
-    for i, (game_id, pgn, year, month) in enumerate(rows, start=1):
+
+    if progress_callback:
+        progress_callback({"type": "queued", "total": total})
+
+    for i, (game_id, pgn, year, month, game_date) in enumerate(rows, start=1):
+        if stop_check and stop_check():
+            break
+        date_str = str(game_date) if game_date else "unknown"
+        if progress_callback:
+            progress_callback({"type": "start", "index": i, "total": total,
+                               "game_id": game_id, "date": date_str})
         try:
-            logger.info("[%d/%d] Evaluating %s (%d-%02d)", i, total_queued, game_id, int(year), int(month))
             eval_rows = _evaluate_with_retry(pgn, game_id, depth=depth)
             if not eval_rows:
-                logger.warning("[%d/%d] Skipping %s — no plies after retries", i, total_queued, game_id)
                 failed += 1
+                if progress_callback:
+                    progress_callback({"type": "failed", "index": i, "total": total,
+                                       "game_id": game_id, "error": "no plies returned"})
                 continue
 
-            # Write evals to parquet
             df_evals = _normalize_evals_df(pd.DataFrame(eval_rows))
             existing_evals = load_eval_month_parquet(username, int(year), int(month))
             if existing_evals.empty:
@@ -187,18 +177,47 @@ def run_evaluation_batch(username: str, batch_size: int = 50, depth: int = 15) -
                 ).drop_duplicates(subset=["game_id", "move_number"], keep="last")
             write_eval_month_parquet(username, int(year), int(month), combined_evals.reset_index(drop=True))
 
-            # Update has_eval in games parquet
             df_games = load_month_parquet(username, int(year), int(month))
             if not df_games.empty:
                 df_games.loc[df_games["game_id"] == game_id, "has_eval"] = True
                 write_month_parquet(username, int(year), int(month), df_games)
 
             evaluated += 1
-            logger.info("[%d/%d] Done: %s — %d plies evaluated", i, total_queued, game_id, len(eval_rows))
+            if progress_callback:
+                progress_callback({"type": "done", "index": i, "total": total,
+                                   "game_id": game_id, "date": date_str, "plies": len(eval_rows)})
         except Exception as e:
             failed += 1
-            logger.error("[%d/%d] Permanently failed %s: %s", i, total_queued, game_id, e, exc_info=True)
+            logger.error("[%d/%d] Permanently failed %s: %s", i, total, game_id, e, exc_info=True)
+            if progress_callback:
+                progress_callback({"type": "failed", "index": i, "total": total,
+                                   "game_id": game_id, "error": str(e)})
 
     remaining = query_unevaluated_count(username)
-    logger.info("Batch complete: evaluated=%d, failed=%d, remaining=%d", evaluated, failed, remaining)
     return {"evaluated": evaluated, "failed": failed, "remaining": remaining}
+
+
+def _query_unevaluated(username: str, limit: Optional[int] = None) -> list:
+    import duckdb
+    glob_path = str(get_games_dir(username) / "*.parquet")
+    limit_clause = f"LIMIT {limit}" if limit else ""
+    con = duckdb.connect()
+    rows = con.execute(
+        f"""SELECT game_id, pgn, year, month, date FROM read_parquet('{glob_path}')
+            WHERE has_eval = false
+            ORDER BY date DESC
+            {limit_clause}"""
+    ).fetchall()
+    con.close()
+    return rows
+
+
+def run_evaluation_all(username: str, depth: int = 15, progress_callback=None, stop_check=None) -> dict:
+    """Evaluate ALL unevaluated games, newest first."""
+    if not games_parquet_exists(username):
+        return {"evaluated": 0, "failed": 0, "remaining": 0}
+    rows = _query_unevaluated(username)
+    if not rows:
+        return {"evaluated": 0, "failed": 0, "remaining": 0}
+    logger.info("Starting full evaluation: %d games, depth=%d, user=%s", len(rows), depth, username)
+    return _run_eval_loop(username, rows, depth, progress_callback, stop_check)

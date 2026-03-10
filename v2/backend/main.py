@@ -1,3 +1,5 @@
+import asyncio
+import json as _json
 import logging
 import os
 import sys
@@ -12,8 +14,9 @@ logging.basicConfig(
 )
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # Ensure backend dir is on sys.path when running from elsewhere
@@ -38,6 +41,11 @@ LICHESS_API = "https://lichess.org/api"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Give the eval runner a reference to this event loop so its background
+    # thread can safely push log lines to SSE subscriber queues.
+    from eval_runner import runner as eval_runner
+    eval_runner.set_loop(asyncio.get_event_loop())
+
     # Auto-migrate on startup if parquet missing but old JSON exists
     try:
         from migrate import migrate_from_json
@@ -267,25 +275,59 @@ async def refresh_full(req: RefreshRequest):
 
 @app.get("/api/evaluate/status/{username}")
 def get_eval_status(username: str):
-    unevaluated = query_unevaluated_count(username)
-    total_result = query_games(username, page=1, page_size=1)
-    total = total_result.get("total", 0) if not total_result.get("no_data") else 0
-    return {"unevaluated": unevaluated, "total": total}
+    from eval_runner import runner
+    status = runner.get_status()
+    status["unevaluated"] = query_unevaluated_count(username)
+    return status
 
 
 @app.post("/api/evaluate")
-async def run_evaluate(req: EvalRequest):
-    import asyncio
-    from functools import partial
+async def start_evaluate(req: EvalRequest):
+    from eval_runner import runner
     try:
-        from evaluator import run_evaluation_batch
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, partial(run_evaluation_batch, req.username, req.batch_size, req.depth)
-        )
-        return result
+        started = runner.start(req.username, req.depth)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    if not started:
+        return {"started": False, "message": "Evaluation already running"}
+    return {"started": True}
+
+
+@app.post("/api/evaluate/stop")
+def stop_evaluate():
+    from eval_runner import runner
+    if not runner.is_running:
+        return {"stopped": False, "message": "No evaluation running"}
+    runner.stop()
+    return {"stopped": True}
+
+
+@app.get("/api/evaluate/stream/{username}")
+async def stream_eval_logs(username: str, request: Request):
+    from eval_runner import runner
+
+    async def generate():
+        q = runner.subscribe()
+        # Replay full buffer so a returning client catches up
+        for line in list(runner.log_buffer):
+            yield f"data: {_json.dumps({'log': line})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    line = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {_json.dumps({'log': line})}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            runner.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ── Health ────────────────────────────────────────────

@@ -315,6 +315,19 @@ body {
 .btn-eval:hover:not(:disabled) { background: #243822; border-color: #8bc34a; }
 .btn-eval:disabled { opacity: 0.6; cursor: not-allowed; }
 
+.btn-eval-running {
+  border-color: #f0c040;
+  color: #f0c040;
+  animation: eval-pulse 1.5s ease-in-out infinite;
+}
+
+.btn-eval-running:hover { background: #2e2a18 !important; border-color: #f0c040 !important; color: #f0c040 !important; }
+
+@keyframes eval-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
 .last-updated {
   font-size: 11px;
   color: #555;

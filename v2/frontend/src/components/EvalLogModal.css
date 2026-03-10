@@ -1,0 +1,209 @@
+.eval-log-modal {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  width: 680px;
+  max-width: 95vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.eval-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2a2a4a;
+  flex-shrink: 0;
+}
+
+.eval-log-title {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.eval-status-running {
+  color: #f0c040;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.eval-status-done {
+  color: #4caf79;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.eval-log-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-stop-eval {
+  background: none;
+  border: 1px solid #c0392b;
+  color: #e05050;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-stop-eval:hover:not(:disabled) {
+  background: #3a1818;
+  color: #ff6b6b;
+}
+
+.btn-stop-eval:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-modal-close {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.btn-modal-close:hover {
+  color: #ccc;
+  background: #2a2a4a;
+}
+
+.eval-stats {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid #2a2a4a;
+  flex-shrink: 0;
+}
+
+.eval-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  border-right: 1px solid #2a2a4a;
+}
+
+.eval-stat:last-child {
+  border-right: none;
+}
+
+.eval-stat-label {
+  font-size: 10px;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.eval-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #ccc;
+  font-variant-numeric: tabular-nums;
+}
+
+.eval-stat-value.green { color: #4caf79; }
+.eval-stat-value.red { color: #e05050; }
+
+.eval-progress-bar {
+  height: 4px;
+  background: #2a2a4a;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.eval-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4caf79, #f0c040);
+  transition: width 0.5s ease;
+}
+
+.eval-progress-label {
+  position: absolute;
+  right: 8px;
+  top: 6px;
+  font-size: 10px;
+  color: #555;
+}
+
+.eval-log-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #aaa;
+  min-height: 0;
+}
+
+.eval-log-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.eval-log-body::-webkit-scrollbar-track {
+  background: #111;
+}
+
+.eval-log-body::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 3px;
+}
+
+.eval-log-empty {
+  color: #444;
+  font-style: italic;
+  padding: 20px 0;
+  text-align: center;
+}
+
+.eval-log-line {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.eval-log-line.success {
+  color: #4caf79;
+}
+
+.eval-log-line.error {
+  color: #e05050;
+}
+
+.btn-scroll-bottom {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  background: #1a1a2e;
+  border: none;
+  border-top: 1px solid #2a2a4a;
+  color: #5a7aaf;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.btn-scroll-bottom:hover {
+  background: #22223e;
+}

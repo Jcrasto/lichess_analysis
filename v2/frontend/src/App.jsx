@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import GameList from './components/GameList.jsx'
 import RefreshModal from './components/RefreshModal.jsx'
 import GameDetail from './components/GameDetail.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
+import EvalLogModal from './components/EvalLogModal.jsx'
 import './App.css'
 
 export default function App() {
@@ -16,11 +17,13 @@ export default function App() {
   const [lastDate, setLastDate] = useState(null)
   const [unevaluatedCount, setUnevaluatedCount] = useState(0)
   const [loading, setLoading] = useState(false)
-  const [evalLoading, setEvalLoading] = useState(false)
+  const [evalRunning, setEvalRunning] = useState(false)
+  const [showEvalLog, setShowEvalLog] = useState(false)
   const [error, setError] = useState(null)
   const [noData, setNoData] = useState(false)
   const [showRefresh, setShowRefresh] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const evalPollRef = useRef(null)
   const [selectedGame, setSelectedGame] = useState(null)
   const [selectedGameEvals, setSelectedGameEvals] = useState(null)
   const [filters, setFilters] = useState({ color: '', outcome: '', perf_type: '', since_date: '', until_date: '', bookmarked_only: false })
@@ -33,6 +36,17 @@ export default function App() {
       const d = await r.json()
       setLastDate(d.last_date)
       setUnevaluatedCount(d.unevaluated_count)
+    } catch {}
+  }, [])
+
+  const fetchEvalStatus = useCallback(async (user) => {
+    try {
+      const r = await fetch(`/api/evaluate/status/${user}`)
+      const d = await r.json()
+      setEvalRunning(d.running)
+      if (!d.running) {
+        setUnevaluatedCount(d.unevaluated ?? 0)
+      }
     } catch {}
   }, [])
 
@@ -111,9 +125,19 @@ export default function App() {
         fetchGames(user, 1, filters)
         fetchStatus(user)
         fetchBookmarks(user)
+        fetchEvalStatus(user)
       })
       .catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll eval status every 5s when running, every 30s otherwise
+  useEffect(() => {
+    if (!defaultUser) return
+    const interval = evalRunning ? 5000 : 30000
+    clearInterval(evalPollRef.current)
+    evalPollRef.current = setInterval(() => fetchEvalStatus(defaultUser), interval)
+    return () => clearInterval(evalPollRef.current)
+  }, [defaultUser, evalRunning, fetchEvalStatus])
 
   const handleRefreshDone = (result) => {
     setShowRefresh(false)
@@ -150,19 +174,24 @@ export default function App() {
   }
 
   const handleRunEvals = async () => {
-    setEvalLoading(true)
     try {
       const r = await fetch('/api/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: defaultUser, batch_size: 50, depth: 15 }),
+        body: JSON.stringify({ username: defaultUser, depth: 15 }),
       })
       const d = await r.json()
-      setUnevaluatedCount(d.remaining || 0)
+      if (d.started) setEvalRunning(true)
     } catch (e) {
       setError(e.message)
-    } finally {
-      setEvalLoading(false)
+    }
+    setShowEvalLog(true)
+  }
+
+  const handleEvalStatusUpdate = (status) => {
+    setEvalRunning(status.running)
+    if (!status.running) {
+      setUnevaluatedCount(status.unevaluated ?? 0)
     }
   }
 
@@ -258,15 +287,21 @@ export default function App() {
 
         <div className="sidebar-spacer" />
 
-        {unevaluatedCount > 0 && (
+        {evalRunning ? (
+          <button
+            className="btn-eval btn-eval-running"
+            onClick={() => setShowEvalLog(true)}
+          >
+            ⚡ EVALUATIONS RUNNING
+          </button>
+        ) : unevaluatedCount > 0 ? (
           <button
             className="btn-eval"
             onClick={handleRunEvals}
-            disabled={evalLoading}
           >
-            {evalLoading ? '⟳ EVALUATING···' : `⚡ RUN EVALUATIONS (${unevaluatedCount})`}
+            ⚡ RUN EVALUATIONS ({unevaluatedCount})
           </button>
-        )}
+        ) : null}
 
         {hasToken && (
           <button
@@ -374,6 +409,14 @@ export default function App() {
           username={defaultUser}
           evals={selectedGameEvals}
           onClose={() => { setSelectedGame(null); setSelectedGameEvals(null) }}
+        />
+      )}
+
+      {showEvalLog && (
+        <EvalLogModal
+          username={defaultUser}
+          onClose={() => setShowEvalLog(false)}
+          onStatusUpdate={handleEvalStatusUpdate}
         />
       )}
     </div>
