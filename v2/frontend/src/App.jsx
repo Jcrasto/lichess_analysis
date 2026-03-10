@@ -4,6 +4,7 @@ import RefreshModal from './components/RefreshModal.jsx'
 import GameDetail from './components/GameDetail.jsx'
 import SettingsModal from './components/SettingsModal.jsx'
 import EvalLogModal from './components/EvalLogModal.jsx'
+import Dashboard from './components/Dashboard.jsx'
 import './App.css'
 
 export default function App() {
@@ -16,7 +17,9 @@ export default function App() {
   const [page, setPage] = useState(1)
   const [lastDate, setLastDate] = useState(null)
   const [unevaluatedCount, setUnevaluatedCount] = useState(0)
+  const [activeTab, setActiveTab] = useState('explorer')
   const [loading, setLoading] = useState(false)
+  const [connecting, setConnecting] = useState(true)
   const [evalRunning, setEvalRunning] = useState(false)
   const [showEvalLog, setShowEvalLog] = useState(false)
   const [error, setError] = useState(null)
@@ -26,7 +29,8 @@ export default function App() {
   const evalPollRef = useRef(null)
   const [selectedGame, setSelectedGame] = useState(null)
   const [selectedGameEvals, setSelectedGameEvals] = useState(null)
-  const [filters, setFilters] = useState({ color: '', outcome: '', perf_type: '', since_date: '', until_date: '', bookmarked_only: false })
+  const [filters, setFilters] = useState({ color: '', outcome: '', perf_type: '', since_date: '', until_date: '', bookmarked_only: false, opening: '', evaluated_only: false })
+  const [openingsList, setOpeningsList] = useState([])
 
   const PAGE_SIZE = 100
 
@@ -35,7 +39,6 @@ export default function App() {
       const r = await fetch(`/api/status/${user}`)
       const d = await r.json()
       setLastDate(d.last_date)
-      setUnevaluatedCount(d.unevaluated_count)
     } catch {}
   }, [])
 
@@ -44,9 +47,23 @@ export default function App() {
       const r = await fetch(`/api/evaluate/status/${user}`)
       const d = await r.json()
       setEvalRunning(d.running)
-      if (!d.running) {
-        setUnevaluatedCount(d.unevaluated ?? 0)
-      }
+    } catch {}
+  }, [])
+
+  const fetchEvalCount = useCallback(async (user, f) => {
+    try {
+      const params = new URLSearchParams({
+        ...(f.color         && { color: f.color }),
+        ...(f.outcome       && { outcome: f.outcome }),
+        ...(f.perf_type     && { perf_type: f.perf_type }),
+        ...(f.since_date    && { since_date: f.since_date }),
+        ...(f.until_date    && { until_date: f.until_date }),
+        ...(f.bookmarked_only && { bookmarked_only: 'true' }),
+        ...(f.opening       && { opening: f.opening }),
+      })
+      const r = await fetch(`/api/evaluate/count/${user}?${params}`)
+      const d = await r.json()
+      setUnevaluatedCount(d.count ?? 0)
     } catch {}
   }, [])
 
@@ -65,6 +82,8 @@ export default function App() {
         ...(f.since_date && { since_date: f.since_date }),
         ...(f.until_date && { until_date: f.until_date }),
         ...(f.bookmarked_only && { bookmarked_only: 'true' }),
+        ...(f.opening && { opening: f.opening }),
+        ...(f.evaluated_only && { evaluated_only: 'true' }),
       })
       const r = await fetch(`/api/games/${user}?${params}`)
       if (!r.ok) {
@@ -87,6 +106,13 @@ export default function App() {
       setLoading(false)
     }
   }, [filters])
+
+  const fetchOpenings = useCallback(async (user) => {
+    try {
+      const r = await fetch(`/api/openings/${user}`)
+      setOpeningsList(await r.json())
+    } catch {}
+  }, [])
 
   const fetchBookmarks = useCallback(async (user) => {
     try {
@@ -114,20 +140,55 @@ export default function App() {
     }
   }
 
-  // Load settings on mount, then auto-load games
+  // Load settings on mount, apply any URL params, then auto-load games
+  // Retries on failure so the page recovers automatically after a backend restart
   useEffect(() => {
-    fetch('/api/settings')
-      .then(r => r.json())
-      .then(d => {
-        const user = d.default_user || 'luckleland'
-        setDefaultUser(user)
-        setHasToken(d.has_token || false)
-        fetchGames(user, 1, filters)
-        fetchStatus(user)
-        fetchBookmarks(user)
-        fetchEvalStatus(user)
-      })
-      .catch(() => {})
+    const urlParams = new URLSearchParams(window.location.search)
+    const urlOpening    = urlParams.get('opening')    || ''
+    const urlSinceDate  = urlParams.get('since_date') || ''
+    const urlUntilDate  = urlParams.get('until_date') || ''
+    const urlTab        = urlParams.get('tab')         || 'explorer'
+    const initialFilters = { color: '', outcome: '', perf_type: '', since_date: urlSinceDate, until_date: urlUntilDate, bookmarked_only: false, opening: urlOpening, evaluated_only: false }
+    if (urlTab !== 'explorer') setActiveTab(urlTab)
+    setFilters(initialFilters)
+
+    let cancelled = false
+    const MAX_ATTEMPTS = 30
+    const MAX_DELAY_MS = 4000
+
+    async function loadSettings() {
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        if (cancelled) return
+        try {
+          const r = await fetch('/api/settings')
+          if (!r.ok) throw new Error('not ready')
+          const d = await r.json()
+          if (cancelled) return
+          const user = d.default_user || 'luckleland'
+          setDefaultUser(user)
+          setHasToken(d.has_token || false)
+          setConnecting(false)
+          fetchGames(user, 1, initialFilters)
+          fetchStatus(user)
+          fetchBookmarks(user)
+          fetchEvalStatus(user)
+          fetchEvalCount(user, initialFilters)
+          fetchOpenings(user)
+          return
+        } catch {
+          if (cancelled) return
+          const delay = Math.min(500 * (attempt + 1), MAX_DELAY_MS)
+          await new Promise(res => setTimeout(res, delay))
+        }
+      }
+      if (!cancelled) {
+        setConnecting(false)
+        setError('Could not connect to backend after multiple attempts.')
+      }
+    }
+
+    loadSettings()
+    return () => { cancelled = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll eval status every 5s when running, every 30s otherwise
@@ -152,8 +213,11 @@ export default function App() {
     setPage(1)
     setGames([])
     setNoData(false)
-    fetchGames(newUser, 1, filters)
+    const resetFilters = { color: '', outcome: '', perf_type: '', since_date: '', until_date: '', bookmarked_only: false, opening: '', evaluated_only: false }
+    setFilters(resetFilters)
+    fetchGames(newUser, 1, resetFilters)
     fetchStatus(newUser)
+    fetchEvalCount(newUser, resetFilters)
     fetchBookmarks(newUser)
   }
 
@@ -161,6 +225,23 @@ export default function App() {
     const newFilters = { ...filters, [key]: val }
     setFilters(newFilters)
     fetchGames(defaultUser, 1, newFilters)
+    fetchEvalCount(defaultUser, newFilters)
+  }
+
+  const handleSliderDateChange = (since, until) => {
+    const newFilters = { ...filters, since_date: since, until_date: until, opening: '' }
+    setFilters(newFilters)
+    fetchEvalCount(defaultUser, newFilters)
+  }
+
+  const handleOpeningSelect = (openingName, sinceYM, untilYM) => {
+    const sinceDate = sinceYM ? sinceYM + '-01' : ''
+    const untilDate = untilYM ? (() => { const [y, m] = untilYM.split('-').map(Number); return `${untilYM}-${new Date(y, m, 0).getDate()}` })() : ''
+    const newFilters = { ...filters, opening: openingName, since_date: sinceDate, until_date: untilDate }
+    setFilters(newFilters)
+    setActiveTab('explorer')
+    fetchGames(defaultUser, 1, newFilters)
+    fetchEvalCount(defaultUser, newFilters)
   }
 
   const handleSelectGame = async (game) => {
@@ -178,7 +259,17 @@ export default function App() {
       const r = await fetch('/api/evaluate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: defaultUser, depth: 15 }),
+        body: JSON.stringify({
+          username: defaultUser,
+          depth: 15,
+          color:          filters.color          || null,
+          outcome:        filters.outcome        || null,
+          perf_type:      filters.perf_type      || null,
+          since_date:     filters.since_date     || null,
+          until_date:     filters.until_date     || null,
+          bookmarked_only: filters.bookmarked_only || false,
+          opening:        filters.opening        || null,
+        }),
       })
       const d = await r.json()
       if (d.started) setEvalRunning(true)
@@ -191,11 +282,27 @@ export default function App() {
   const handleEvalStatusUpdate = (status) => {
     setEvalRunning(status.running)
     if (!status.running) {
-      setUnevaluatedCount(status.unevaluated ?? 0)
+      fetchEvalCount(defaultUser, filters)
     }
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE)
+
+  if (connecting) {
+    return (
+      <div className="app">
+        <div className="empty-state">
+          <div className="empty-board">
+            {['♜','♞','♝','♛','♚','♝','♞','♜'].map((p, i) => (
+              <span key={i} className="empty-piece" style={{ animationDelay: `${i * 0.1}s` }}>{p}</span>
+            ))}
+          </div>
+          <h1 className="empty-title">Connecting to backend</h1>
+          <p className="empty-sub">Waiting for the server to become ready<span className="loading-dot"> ···</span></p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="app">
@@ -218,9 +325,10 @@ export default function App() {
               <button
                 className="btn-clear-filters"
                 onClick={() => {
-                  const cleared = { color: '', outcome: '', perf_type: '', since_date: '', until_date: '', bookmarked_only: false }
+                  const cleared = { color: '', outcome: '', perf_type: '', since_date: '', until_date: '', bookmarked_only: false, opening: '', evaluated_only: false }
                   setFilters(cleared)
                   fetchGames(defaultUser, 1, cleared)
+                  fetchEvalCount(defaultUser, cleared)
                 }}
               >
                 CLEAR
@@ -258,23 +366,67 @@ export default function App() {
               <option value="rapid">Rapid</option>
               <option value="classical">Classical</option>
             </select>
-            <div className="date-filter-row">
-              <input
-                type="date"
-                className="date-input"
-                title="From date"
-                value={filters.since_date}
-                onChange={e => handleFilterChange('since_date', e.target.value)}
-              />
-              <span className="date-sep">–</span>
-              <input
-                type="date"
-                className="date-input"
-                title="To date"
-                value={filters.until_date}
-                onChange={e => handleFilterChange('until_date', e.target.value)}
-              />
+            <div className="date-filter-wrap">
+              <div className="date-filter-row">
+                <input
+                  type="date"
+                  className="date-input"
+                  title="From date"
+                  value={filters.since_date}
+                  onChange={e => handleFilterChange('since_date', e.target.value)}
+                />
+                <span className="date-sep">–</span>
+                <input
+                  type="date"
+                  className="date-input"
+                  title="To date"
+                  value={filters.until_date}
+                  onChange={e => handleFilterChange('until_date', e.target.value)}
+                />
+              </div>
+              <div className="date-quick-btns">
+                {[
+                  { label: '30D', days: 30 },
+                  { label: '90D', days: 90 },
+                  { label: '6M',  days: 180 },
+                  { label: '1Y',  days: 365 },
+                ].map(({ label, days }) => {
+                  const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
+                  const active = filters.since_date === since && !filters.until_date
+                  return (
+                    <button
+                      key={label}
+                      className={`date-quick-btn ${active ? 'active' : ''}`}
+                      onClick={() => {
+                        const newF = { ...filters, since_date: since, until_date: '' }
+                        setFilters(newF)
+                        fetchGames(defaultUser, 1, newF)
+                        fetchEvalCount(defaultUser, newF)
+                      }}
+                    >{label}</button>
+                  )
+                })}
+                <button
+                  className={`date-quick-btn ${!filters.since_date && !filters.until_date ? 'active' : ''}`}
+                  onClick={() => {
+                    const newF = { ...filters, since_date: '', until_date: '' }
+                    setFilters(newF)
+                    fetchGames(defaultUser, 1, newF)
+                    fetchEvalCount(defaultUser, newF)
+                  }}
+                >All</button>
+              </div>
             </div>
+            <select
+              className="select-input"
+              value={filters.opening}
+              onChange={e => handleFilterChange('opening', e.target.value)}
+            >
+              <option value="">All Openings</option>
+              {openingsList.map(op => (
+                <option key={op} value={op}>{op}</option>
+              ))}
+            </select>
             <button
               className={`btn-bookmark-filter ${filters.bookmarked_only ? 'active' : ''}`}
               onClick={() => handleFilterChange('bookmarked_only', !filters.bookmarked_only)}
@@ -282,10 +434,28 @@ export default function App() {
               ★ Bookmarked only
               {bookmarks.size > 0 && <span className="bookmark-count">{bookmarks.size}</span>}
             </button>
+            <button
+              className={`btn-bookmark-filter ${filters.evaluated_only ? 'active' : ''}`}
+              onClick={() => handleFilterChange('evaluated_only', !filters.evaluated_only)}
+            >
+              ⚡ Evaluated only
+            </button>
           </div>
         </div>
 
         <div className="sidebar-spacer" />
+
+        {filters.since_date && (
+          <button
+            className="btn-show-games"
+            onClick={() => {
+              fetchGames(defaultUser, 1, filters)
+              setActiveTab('explorer')
+            }}
+          >
+            ♟ SHOW GAMES
+          </button>
+        )}
 
         {evalRunning ? (
           <button
@@ -328,7 +498,26 @@ export default function App() {
       </aside>
 
       <main className="main">
-        {noData ? (
+        <div className="tab-bar">
+          <button
+            className={`tab-btn ${activeTab === 'explorer' ? 'tab-btn--active' : ''}`}
+            onClick={() => setActiveTab('explorer')}
+          >
+            ♟ GAMES EXPLORER
+          </button>
+          <button
+            className={`tab-btn ${activeTab === 'dashboard' ? 'tab-btn--active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            ◈ ANALYSIS
+          </button>
+        </div>
+
+        {activeTab === 'dashboard' ? (
+          <div className="dashboard-scroll">
+            <Dashboard username={defaultUser} onOpeningSelect={handleOpeningSelect} onSliderChange={handleSliderDateChange} />
+          </div>
+        ) : noData ? (
           <div className="empty-state">
             <div className="empty-board">
               {['♜','♞','♝','♛','♚','♝','♞','♜'].map((p, i) => (

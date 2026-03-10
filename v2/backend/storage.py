@@ -68,10 +68,8 @@ def _serialize_row(row: dict) -> dict:
     return row
 
 
-def query_games(
+def _build_game_conditions(
     username: str,
-    page: int = 1,
-    page_size: int = 100,
     color: Optional[str] = None,
     result: Optional[str] = None,
     outcome: Optional[str] = None,
@@ -79,11 +77,10 @@ def query_games(
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
     bookmarked_only: bool = False,
-) -> dict:
-    if not games_parquet_exists(username):
-        return {"no_data": True}
-
-    glob_path = str(get_games_dir(username) / "*.parquet")
+    opening: Optional[str] = None,
+    evaluated_only: bool = False,
+) -> list:
+    """Build WHERE conditions list shared by query_games and eval queries."""
     u = username.lower()
     conditions = []
 
@@ -92,7 +89,6 @@ def query_games(
     elif color == "black":
         conditions.append(f"lower(black) = '{u}'")
 
-    # outcome is user-relative: win/loss/draw
     if outcome == "win":
         conditions.append(
             f"((lower(white) = '{u}' AND result = '1-0') OR (lower(black) = '{u}' AND result = '0-1'))"
@@ -104,7 +100,6 @@ def query_games(
     elif outcome == "draw":
         conditions.append("result = '1/2-1/2'")
     elif result:
-        # raw PGN result fallback
         conditions.append(f"result = '{result}'")
 
     if perf_type:
@@ -115,11 +110,36 @@ def query_games(
         conditions.append(f"date <= DATE '{until_date}'")
     if bookmarked_only:
         bm_ids = load_bookmarks(username)
-        if not bm_ids:
-            return {"total": 0, "page": page, "page_size": page_size, "games": []}
-        id_list = ", ".join(f"'{gid}'" for gid in bm_ids)
-        conditions.append(f"game_id IN ({id_list})")
+        id_list = ", ".join(f"'{gid}'" for gid in bm_ids) if bm_ids else None
+        conditions.append(f"game_id IN ({id_list})" if id_list else "1 = 0")
+    if opening:
+        safe = opening.replace("'", "''")
+        conditions.append(f"lower(opening) = lower('{safe}')")   # exact match
+    if evaluated_only:
+        conditions.append("has_eval = true")
 
+    return conditions
+
+
+def query_games(
+    username: str,
+    page: int = 1,
+    page_size: int = 100,
+    color: Optional[str] = None,
+    result: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+    evaluated_only: bool = False,
+) -> dict:
+    if not games_parquet_exists(username):
+        return {"no_data": True}
+
+    glob_path = str(get_games_dir(username) / "*.parquet")
+    conditions = _build_game_conditions(username, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only)
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     offset = (page - 1) * page_size
 
@@ -139,6 +159,59 @@ def query_games(
 
     games = [_serialize_row(dict(zip(cols, row))) for row in rows]
     return {"total": total, "page": page, "page_size": page_size, "games": games}
+
+
+def query_unevaluated_games(
+    username: str,
+    color: Optional[str] = None,
+    result: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+) -> list:
+    """Return (game_id, pgn, year, month, date) rows for unevaluated games matching filters."""
+    if not games_parquet_exists(username):
+        return []
+    import duckdb as _duckdb
+    glob_path = str(get_games_dir(username) / "*.parquet")
+    conditions = _build_game_conditions(username, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening)
+    conditions.append("(has_eval = false OR has_eval IS NULL)")
+    where_clause = "WHERE " + " AND ".join(conditions)
+    con = _duckdb.connect()
+    rows = con.execute(
+        f"SELECT game_id, pgn, year, month, date FROM read_parquet('{glob_path}') {where_clause} ORDER BY date DESC"
+    ).fetchall()
+    con.close()
+    return rows
+
+
+def query_unevaluated_count_filtered(
+    username: str,
+    color: Optional[str] = None,
+    result: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+) -> int:
+    if not games_parquet_exists(username):
+        return 0
+    import duckdb as _duckdb
+    glob_path = str(get_games_dir(username) / "*.parquet")
+    conditions = _build_game_conditions(username, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening)
+    conditions.append("(has_eval = false OR has_eval IS NULL)")
+    where_clause = "WHERE " + " AND ".join(conditions)
+    con = _duckdb.connect()
+    count = con.execute(
+        f"SELECT COUNT(*) FROM read_parquet('{glob_path}') {where_clause}"
+    ).fetchone()[0]
+    con.close()
+    return count
 
 
 def query_game_by_id(username: str, game_id: str) -> Optional[dict]:
@@ -225,6 +298,144 @@ def query_evals_for_game(username: str, game_id: str) -> list:
     cols = [d[0] for d in con.description]
     con.close()
     return [_serialize_row(dict(zip(cols, row))) for row in rows]
+
+
+def query_unique_openings(username: str) -> list:
+    """Return all unique opening names, sorted by frequency descending."""
+    if not games_parquet_exists(username):
+        return []
+    glob_path = str(get_games_dir(username) / "*.parquet")
+    con = duckdb.connect()
+    rows = con.execute(f"""
+        SELECT opening
+        FROM read_parquet('{glob_path}')
+        WHERE opening IS NOT NULL AND TRIM(opening) != '' AND opening != '?'
+        GROUP BY opening
+        ORDER BY COUNT(*) DESC, opening
+    """).fetchall()
+    con.close()
+    return [r[0] for r in rows]
+
+
+def query_analytics(
+    username: str,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+) -> dict:
+    if not games_parquet_exists(username):
+        return {}
+
+    glob_path = str(get_games_dir(username) / "*.parquet")
+    u = username.lower()
+
+    # Build reusable date filter (always a valid boolean expression)
+    date_conds = []
+    if since_date:
+        date_conds.append(f"date >= DATE '{since_date}'")
+    if until_date:
+        date_conds.append(f"date <= DATE '{until_date}'")
+    date_filter = " AND ".join(date_conds) if date_conds else "TRUE"
+
+    win_expr  = f"((lower(white)='{u}' AND result='1-0') OR (lower(black)='{u}' AND result='0-1'))"
+    loss_expr = f"((lower(white)='{u}' AND result='0-1') OR (lower(black)='{u}' AND result='1-0'))"
+    draw_expr = "result='1/2-1/2'"
+
+    con = duckdb.connect()
+
+    # Full data date range (unfiltered — used to set slider bounds)
+    dr = con.execute(
+        f"SELECT MIN(date), MAX(date) FROM read_parquet('{glob_path}')"
+    ).fetchone()
+    date_range = {
+        "min": dr[0].isoformat() if dr[0] else None,
+        "max": dr[1].isoformat() if dr[1] else None,
+    }
+
+    # Games per month (wins / losses / draws)
+    rows = con.execute(f"""
+        SELECT year, month,
+            COUNT(*) AS count,
+            SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws
+        FROM read_parquet('{glob_path}')
+        WHERE {date_filter}
+        GROUP BY year, month ORDER BY year, month
+    """).fetchall()
+    games_per_month = [
+        {"period": f"{r[0]}-{r[1]:02d}", "count": r[2], "wins": r[3], "losses": r[4], "draws": r[5]}
+        for r in rows
+    ]
+
+    # Average ELO per month
+    rows = con.execute(f"""
+        SELECT year, month,
+            ROUND(AVG(CASE WHEN lower(white)='{u}' THEN CAST(white_elo AS DOUBLE)
+                          WHEN lower(black)='{u}' THEN CAST(black_elo AS DOUBLE)
+                     END)) AS avg_elo
+        FROM read_parquet('{glob_path}')
+        WHERE {date_filter}
+          AND (lower(white)='{u}' OR lower(black)='{u}')
+        GROUP BY year, month ORDER BY year, month
+    """).fetchall()
+    elo_per_month = [
+        {"period": f"{r[0]}-{r[1]:02d}", "elo": int(r[2])}
+        for r in rows if r[2] is not None
+    ]
+
+    # Top openings (stacked wins/losses/draws)
+    rows = con.execute(f"""
+        SELECT opening, COUNT(*) AS count,
+            SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws,
+            SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses
+        FROM read_parquet('{glob_path}')
+        WHERE ({date_filter})
+          AND opening IS NOT NULL AND TRIM(opening) != '' AND opening != '?'
+        GROUP BY opening ORDER BY count DESC LIMIT 15
+    """).fetchall()
+    top_openings = [
+        {"opening": r[0], "count": r[1], "wins": r[2], "draws": r[3], "losses": r[4]}
+        for r in rows
+    ]
+
+    # Overall result summary
+    r = con.execute(f"""
+        SELECT
+            SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws,
+            COUNT(*) AS total
+        FROM read_parquet('{glob_path}')
+        WHERE {date_filter}
+    """).fetchone()
+    result_summary = {"wins": r[0], "losses": r[1], "draws": r[2], "total": r[3]}
+
+    # Performance type breakdown
+    rows = con.execute(f"""
+        SELECT perf_type, COUNT(*) AS count,
+            SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws
+        FROM read_parquet('{glob_path}')
+        WHERE ({date_filter})
+          AND perf_type IS NOT NULL AND perf_type != ''
+        GROUP BY perf_type ORDER BY count DESC
+    """).fetchall()
+    perf_breakdown = [
+        {"perf_type": r[0], "count": r[1], "wins": r[2], "losses": r[3], "draws": r[4]}
+        for r in rows
+    ]
+
+    con.close()
+    return {
+        "date_range": date_range,
+        "games_per_month": games_per_month,
+        "elo_per_month": elo_per_month,
+        "top_openings": top_openings,
+        "result_summary": result_summary,
+        "perf_breakdown": perf_breakdown,
+    }
 
 
 def update_has_eval(username: str, game_id: str, value: bool = True):

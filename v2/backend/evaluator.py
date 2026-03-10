@@ -33,6 +33,7 @@ from storage import (
     load_month_parquet,
     write_month_parquet,
     query_unevaluated_count,
+    query_unevaluated_games,
 )
 
 STOCKFISH_CANDIDATES = [
@@ -197,7 +198,15 @@ def _run_eval_loop(username: str, rows: list, depth: int, progress_callback=None
     return {"evaluated": evaluated, "failed": failed, "remaining": remaining}
 
 
-def _query_unevaluated(username: str, limit: Optional[int] = None) -> list:
+def _query_unevaluated(username: str, limit: Optional[int] = None, **filters) -> list:
+    """Query unevaluated games, optionally with game filters."""
+    rows = query_unevaluated_games(username, **filters)
+    if limit:
+        rows = rows[:limit]
+    return rows
+
+
+def _query_unevaluated_legacy(username: str, limit: Optional[int] = None) -> list:
     import duckdb
     glob_path = str(get_games_dir(username) / "*.parquet")
     limit_clause = f"LIMIT {limit}" if limit else ""
@@ -212,12 +221,12 @@ def _query_unevaluated(username: str, limit: Optional[int] = None) -> list:
     return rows
 
 
-def run_evaluation_all(username: str, depth: int = 15, progress_callback=None, stop_check=None) -> dict:
-    """Evaluate ALL unevaluated games, newest first."""
+def run_evaluation_all(username: str, depth: int = 15, progress_callback=None, stop_check=None, **filters) -> dict:
+    """Evaluate unevaluated games matching filters (or all if no filters), newest first."""
     if not games_parquet_exists(username):
         return {"evaluated": 0, "failed": 0, "remaining": 0}
-    rows = _query_unevaluated(username)
+    rows = _query_unevaluated(username, **filters)
     if not rows:
         return {"evaluated": 0, "failed": 0, "remaining": 0}
-    logger.info("Starting full evaluation: %d games, depth=%d, user=%s", len(rows), depth, username)
+    logger.info("Starting evaluation: %d games, depth=%d, user=%s, filters=%s", len(rows), depth, username, filters or "none")
     return _run_eval_loop(username, rows, depth, progress_callback, stop_check)

@@ -31,6 +31,8 @@ from storage import (
     query_last_date,
     query_unevaluated_count,
     query_evals_for_game,
+    query_analytics,
+    query_unique_openings,
     load_bookmarks,
     save_bookmarks,
 )
@@ -83,8 +85,14 @@ class RefreshRequest(BaseModel):
 
 class EvalRequest(BaseModel):
     username: str
-    batch_size: int = 50
     depth: int = 15
+    color: Optional[str] = None
+    outcome: Optional[str] = None
+    perf_type: Optional[str] = None
+    since_date: Optional[str] = None
+    until_date: Optional[str] = None
+    bookmarked_only: bool = False
+    opening: Optional[str] = None
 
 
 # ── Settings ──────────────────────────────────────────
@@ -197,8 +205,10 @@ def get_games(
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
     bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+    evaluated_only: bool = False,
 ):
-    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only)
+    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only)
 
 
 @app.get("/api/game/{username}/{game_id}")
@@ -212,6 +222,24 @@ def get_game(username: str, game_id: str):
 @app.get("/api/evals/{username}/{game_id}")
 def get_evals(username: str, game_id: str):
     return query_evals_for_game(username, game_id)
+
+
+# ── Openings list ─────────────────────────────────────
+
+@app.get("/api/openings/{username}")
+def get_openings(username: str):
+    return query_unique_openings(username)
+
+
+# ── Analytics ─────────────────────────────────────────
+
+@app.get("/api/analytics/{username}")
+def get_analytics(
+    username: str,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+):
+    return query_analytics(username, since_date, until_date)
 
 
 # ── Refresh ───────────────────────────────────────────
@@ -281,11 +309,36 @@ def get_eval_status(username: str):
     return status
 
 
+@app.get("/api/evaluate/count/{username}")
+def get_eval_count(
+    username: str,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    bookmarked_only: bool = False,
+    opening: Optional[str] = None,
+):
+    from storage import query_unevaluated_count_filtered
+    count = query_unevaluated_count_filtered(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date,
+        bookmarked_only=bookmarked_only, opening=opening,
+    )
+    return {"count": count}
+
+
 @app.post("/api/evaluate")
 async def start_evaluate(req: EvalRequest):
     from eval_runner import runner
+    filters = {
+        "color": req.color, "outcome": req.outcome, "perf_type": req.perf_type,
+        "since_date": req.since_date, "until_date": req.until_date,
+        "bookmarked_only": req.bookmarked_only, "opening": req.opening,
+    }
     try:
-        started = runner.start(req.username, req.depth)
+        started = runner.start(req.username, req.depth, filters)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     if not started:

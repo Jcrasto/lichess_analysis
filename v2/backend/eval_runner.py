@@ -27,6 +27,7 @@ class EvalRunner:
         self.total_queued: int = 0
         self.started_at: Optional[datetime] = None
         self.finished_at: Optional[datetime] = None
+        self.filters: dict = {}
         self.log_buffer: deque = deque(maxlen=2000)
         self._subscribers: set = set()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -69,7 +70,7 @@ class EvalRunner:
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
         }
 
-    def start(self, username: str, depth: int = 15) -> bool:
+    def start(self, username: str, depth: int = 15, filters: dict = None) -> bool:
         """Start evaluation in background thread. Returns False if already running."""
         with self._lock:
             if self.is_running:
@@ -78,6 +79,7 @@ class EvalRunner:
             self._stop_requested = False
             self.username = username
             self.depth = depth
+            self.filters = {k: v for k, v in (filters or {}).items() if v}
             self.evaluated = 0
             self.failed = 0
             self.remaining = 0
@@ -85,7 +87,7 @@ class EvalRunner:
             self.started_at = datetime.now(timezone.utc)
             self.finished_at = None
 
-        t = threading.Thread(target=self._run, args=(username, depth), daemon=True)
+        t = threading.Thread(target=self._run, args=(username, depth, self.filters), daemon=True)
         t.start()
         return True
 
@@ -119,7 +121,7 @@ class EvalRunner:
                 f"[{event['index']}/{event['total']}] ✗ {event['game_id']}  {event.get('error', '')}"
             )
 
-    def _run(self, username: str, depth: int):
+    def _run(self, username: str, depth: int, filters: dict):
         try:
             from evaluator import run_evaluation_all
             result = run_evaluation_all(
@@ -127,6 +129,7 @@ class EvalRunner:
                 depth=depth,
                 progress_callback=self._on_progress,
                 stop_check=lambda: self._stop_requested,
+                **filters,
             )
             if self._stop_requested:
                 self._emit(
