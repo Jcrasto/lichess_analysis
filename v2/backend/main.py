@@ -88,6 +88,7 @@ class RefreshRequest(BaseModel):
 class EvalRequest(BaseModel):
     username: str
     depth: int = 15
+    workers: Optional[int] = None  # None = auto-detect physical cores
     color: Optional[str] = None
     outcome: Optional[str] = None
     perf_type: Optional[str] = None
@@ -378,7 +379,7 @@ async def start_evaluate(req: EvalRequest):
         "bookmarked_only": req.bookmarked_only, "opening": req.opening,
     }
     try:
-        started = runner.start(req.username, req.depth, filters)
+        started = runner.start(req.username, req.depth, filters, workers=req.workers)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     if not started:

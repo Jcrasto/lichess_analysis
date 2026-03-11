@@ -1,9 +1,14 @@
 import asyncio
 import logging
+import os
 import threading
 from collections import deque
 from datetime import datetime, timezone
 from typing import Optional
+
+
+def _default_workers() -> int:
+    return max(1, (os.cpu_count() or 2) // 2)
 
 logger = logging.getLogger("eval_runner")
 
@@ -17,10 +22,12 @@ class EvalRunner:
 
     def __init__(self):
         self._lock = threading.Lock()
+        self._counter_lock = threading.Lock()
         self.is_running: bool = False
         self._stop_requested: bool = False
         self.username: Optional[str] = None
         self.depth: int = 15
+        self.workers: int = 4
         self.evaluated: int = 0
         self.failed: int = 0
         self.remaining: int = 0
@@ -59,18 +66,20 @@ class EvalRunner:
     # ── public API ────────────────────────────────────────────────────────────
 
     def get_status(self) -> dict:
-        return {
-            "running": self.is_running,
-            "username": self.username,
-            "evaluated": self.evaluated,
-            "failed": self.failed,
-            "remaining": self.remaining,
-            "total_queued": self.total_queued,
-            "started_at": self.started_at.isoformat() if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
-        }
+        with self._counter_lock:
+            return {
+                "running": self.is_running,
+                "username": self.username,
+                "workers": self.workers,
+                "evaluated": self.evaluated,
+                "failed": self.failed,
+                "remaining": self.remaining,
+                "total_queued": self.total_queued,
+                "started_at": self.started_at.isoformat() if self.started_at else None,
+                "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+            }
 
-    def start(self, username: str, depth: int = 15, filters: dict = None) -> bool:
+    def start(self, username: str, depth: int = 15, filters: dict = None, workers: Optional[int] = None) -> bool:
         """Start evaluation in background thread. Returns False if already running."""
         with self._lock:
             if self.is_running:
@@ -79,6 +88,7 @@ class EvalRunner:
             self._stop_requested = False
             self.username = username
             self.depth = depth
+            self.workers = workers if workers is not None else _default_workers()
             self.filters = {k: v for k, v in (filters or {}).items() if v}
             self.evaluated = 0
             self.failed = 0
@@ -87,7 +97,7 @@ class EvalRunner:
             self.started_at = datetime.now(timezone.utc)
             self.finished_at = None
 
-        t = threading.Thread(target=self._run, args=(username, depth, self.filters), daemon=True)
+        t = threading.Thread(target=self._run, args=(username, depth, self.filters, workers), daemon=True)
         t.start()
         return True
 
@@ -101,32 +111,36 @@ class EvalRunner:
     def _on_progress(self, event: dict):
         etype = event["type"]
         if etype == "queued":
-            self.total_queued = event["total"]
-            self.remaining = event["total"]
-            self._emit(f"Found {event['total']} unevaluated games — starting (depth={self.depth})")
+            with self._counter_lock:
+                self.total_queued = event["total"]
+                self.remaining = event["total"]
+            self._emit(f"Found {event['total']} unevaluated games — starting (depth={self.depth}, workers={self.workers})")
         elif etype == "start":
             self._emit(
                 f"[{event['index']}/{event['total']}] → {event['game_id']}  ({event['date']})"
             )
         elif etype == "done":
-            self.evaluated += 1
-            self.remaining = max(0, event["total"] - event["index"])
+            with self._counter_lock:
+                self.evaluated += 1
+                self.remaining = max(0, self.total_queued - self.evaluated - self.failed)
             self._emit(
                 f"[{event['index']}/{event['total']}] ✓ {event['game_id']}  {event['plies']} plies"
             )
         elif etype == "failed":
-            self.failed += 1
-            self.remaining = max(0, event["total"] - event["index"])
+            with self._counter_lock:
+                self.failed += 1
+                self.remaining = max(0, self.total_queued - self.evaluated - self.failed)
             self._emit(
                 f"[{event['index']}/{event['total']}] ✗ {event['game_id']}  {event.get('error', '')}"
             )
 
-    def _run(self, username: str, depth: int, filters: dict):
+    def _run(self, username: str, depth: int, filters: dict, workers: int = 4):
         try:
             from evaluator import run_evaluation_all
             result = run_evaluation_all(
                 username,
                 depth=depth,
+                workers=workers,
                 progress_callback=self._on_progress,
                 stop_check=lambda: self._stop_requested,
                 **filters,
