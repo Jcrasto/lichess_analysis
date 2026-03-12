@@ -79,6 +79,9 @@ def _build_game_conditions(
     bookmarked_only: bool = False,
     opening: Optional[str] = None,
     evaluated_only: bool = False,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ) -> list:
     """Build WHERE conditions list shared by query_games and eval queries."""
     u = username.lower()
@@ -117,6 +120,13 @@ def _build_game_conditions(
         conditions.append(f"lower(opening) = lower('{safe}')")   # exact match
     if evaluated_only:
         conditions.append("has_eval = true")
+    if termination:
+        safe_term = termination.replace("'", "''")
+        conditions.append(f"lower(termination) = lower('{safe_term}')")
+    if min_moves is not None:
+        conditions.append(f"(length(moves) - length(replace(moves, '. ', ' '))) >= {min_moves}")
+    if max_moves is not None:
+        conditions.append(f"(length(moves) - length(replace(moves, '. ', ' '))) <= {max_moves}")
 
     return conditions
 
@@ -134,12 +144,15 @@ def query_games(
     bookmarked_only: bool = False,
     opening: Optional[str] = None,
     evaluated_only: bool = False,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ) -> dict:
     if not games_parquet_exists(username):
         return {"no_data": True}
 
     glob_path = str(get_games_dir(username) / "*.parquet")
-    conditions = _build_game_conditions(username, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only)
+    conditions = _build_game_conditions(username, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only, termination, min_moves, max_moves)
     where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
     offset = (page - 1) * page_size
 
@@ -316,6 +329,10 @@ def compute_game_eval_summaries(
     until_date: Optional[str] = None,
     opening: Optional[str] = None,
     sort_by: str = "blunder_count",
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    bookmarked_only: bool = False,
 ) -> dict:
     if not evals_parquet_exists(username):
         return {"no_evals": True}
@@ -332,7 +349,8 @@ def compute_game_eval_summaries(
     conditions = _build_game_conditions(
         username, color=color, outcome=outcome, perf_type=perf_type,
         since_date=since_date, until_date=until_date, opening=opening,
-        evaluated_only=True,
+        evaluated_only=True, termination=termination,
+        min_moves=min_moves, max_moves=max_moves, bookmarked_only=bookmarked_only,
     )
     games_conditions = " AND ".join(conditions) if conditions else "TRUE"
     offset = (page - 1) * page_size
@@ -415,6 +433,7 @@ def compute_mistake_patterns(
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
     opening: Optional[str] = None,
+    termination: Optional[str] = None,
 ) -> dict:
     if not evals_parquet_exists(username):
         return {"no_evals": True}
@@ -428,7 +447,7 @@ def compute_mistake_patterns(
     conditions = _build_game_conditions(
         username, color=color, outcome=outcome, perf_type=perf_type,
         since_date=since_date, until_date=until_date, opening=opening,
-        evaluated_only=True,
+        evaluated_only=True, termination=termination,
     )
     games_conditions = " AND ".join(conditions) if conditions else "TRUE"
 
@@ -581,6 +600,13 @@ def query_analytics(
     username: str,
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ) -> dict:
     if not games_parquet_exists(username):
         return {}
@@ -588,13 +614,12 @@ def query_analytics(
     glob_path = str(get_games_dir(username) / "*.parquet")
     u = username.lower()
 
-    # Build reusable date filter (always a valid boolean expression)
-    date_conds = []
-    if since_date:
-        date_conds.append(f"date >= DATE '{since_date}'")
-    if until_date:
-        date_conds.append(f"date <= DATE '{until_date}'")
-    date_filter = " AND ".join(date_conds) if date_conds else "TRUE"
+    conditions = _build_game_conditions(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        termination=termination, min_moves=min_moves, max_moves=max_moves,
+    )
+    filter_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     win_expr  = f"((lower(white)='{u}' AND result='1-0') OR (lower(black)='{u}' AND result='0-1'))"
     loss_expr = f"((lower(white)='{u}' AND result='0-1') OR (lower(black)='{u}' AND result='1-0'))"
@@ -602,7 +627,7 @@ def query_analytics(
 
     con = duckdb.connect()
 
-    # Full data date range (unfiltered — used to set slider bounds)
+    # Full data date range (always unfiltered)
     dr = con.execute(
         f"SELECT MIN(date), MAX(date) FROM read_parquet('{glob_path}')"
     ).fetchone()
@@ -611,7 +636,13 @@ def query_analytics(
         "max": dr[1].isoformat() if dr[1] else None,
     }
 
-    # Games per month (wins / losses / draws)
+    # Helper: add an extra AND condition to the filter clause
+    def extra_filter(cond):
+        if filter_clause:
+            return f"{filter_clause} AND {cond}"
+        return f"WHERE {cond}"
+
+    # Games per month
     rows = con.execute(f"""
         SELECT year, month,
             COUNT(*) AS count,
@@ -619,7 +650,7 @@ def query_analytics(
             SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
             SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws
         FROM read_parquet('{glob_path}')
-        WHERE {date_filter}
+        {filter_clause}
         GROUP BY year, month ORDER BY year, month
     """).fetchall()
     games_per_month = [
@@ -628,14 +659,14 @@ def query_analytics(
     ]
 
     # Average ELO per month
+    elo_cond = extra_filter(f"(lower(white)='{u}' OR lower(black)='{u}')")
     rows = con.execute(f"""
         SELECT year, month,
             ROUND(AVG(CASE WHEN lower(white)='{u}' THEN CAST(white_elo AS DOUBLE)
                           WHEN lower(black)='{u}' THEN CAST(black_elo AS DOUBLE)
                      END)) AS avg_elo
         FROM read_parquet('{glob_path}')
-        WHERE {date_filter}
-          AND (lower(white)='{u}' OR lower(black)='{u}')
+        {elo_cond}
         GROUP BY year, month ORDER BY year, month
     """).fetchall()
     elo_per_month = [
@@ -643,15 +674,15 @@ def query_analytics(
         for r in rows if r[2] is not None
     ]
 
-    # Top openings (stacked wins/losses/draws)
+    # Top openings
+    op_cond = extra_filter("opening IS NOT NULL AND TRIM(opening) != '' AND opening != '?'")
     rows = con.execute(f"""
         SELECT opening, COUNT(*) AS count,
             SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
             SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws,
             SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses
         FROM read_parquet('{glob_path}')
-        WHERE ({date_filter})
-          AND opening IS NOT NULL AND TRIM(opening) != '' AND opening != '?'
+        {op_cond}
         GROUP BY opening ORDER BY count DESC LIMIT 15
     """).fetchall()
     top_openings = [
@@ -667,23 +698,57 @@ def query_analytics(
             SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws,
             COUNT(*) AS total
         FROM read_parquet('{glob_path}')
-        WHERE {date_filter}
+        {filter_clause}
     """).fetchone()
     result_summary = {"wins": r[0], "losses": r[1], "draws": r[2], "total": r[3]}
 
     # Performance type breakdown
+    perf_cond = extra_filter("perf_type IS NOT NULL AND perf_type != ''")
     rows = con.execute(f"""
         SELECT perf_type, COUNT(*) AS count,
             SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
             SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
             SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws
         FROM read_parquet('{glob_path}')
-        WHERE ({date_filter})
-          AND perf_type IS NOT NULL AND perf_type != ''
+        {perf_cond}
         GROUP BY perf_type ORDER BY count DESC
     """).fetchall()
     perf_breakdown = [
         {"perf_type": r[0], "count": r[1], "wins": r[2], "losses": r[3], "draws": r[4]}
+        for r in rows
+    ]
+
+    # Termination breakdown
+    rows = con.execute(f"""
+        SELECT COALESCE(NULLIF(TRIM(termination), ''), 'Unknown') AS term,
+            COUNT(*) AS count,
+            SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws
+        FROM read_parquet('{glob_path}')
+        {filter_clause}
+        GROUP BY term ORDER BY count DESC
+    """).fetchall()
+    termination_breakdown = [
+        {"term": r[0], "count": r[1], "wins": r[2], "losses": r[3], "draws": r[4]}
+        for r in rows
+    ]
+
+    # Move count distribution (buckets of 10)
+    moves_cond = extra_filter("moves IS NOT NULL AND moves != ''")
+    rows = con.execute(f"""
+        SELECT
+            ((length(moves) - length(replace(moves, '. ', ' '))) / 10) * 10 AS bucket,
+            COUNT(*) AS count,
+            SUM(CASE WHEN {win_expr}  THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN {loss_expr} THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN {draw_expr} THEN 1 ELSE 0 END) AS draws
+        FROM read_parquet('{glob_path}')
+        {moves_cond}
+        GROUP BY bucket ORDER BY bucket
+    """).fetchall()
+    moves_distribution = [
+        {"range": f"{int(r[0])}-{int(r[0])+9}", "bucket": int(r[0]), "count": r[1], "wins": r[2], "losses": r[3], "draws": r[4]}
         for r in rows
     ]
 
@@ -695,6 +760,8 @@ def query_analytics(
         "top_openings": top_openings,
         "result_summary": result_summary,
         "perf_breakdown": perf_breakdown,
+        "termination_breakdown": termination_breakdown,
+        "moves_distribution": moves_distribution,
     }
 
 

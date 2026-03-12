@@ -397,3 +397,16 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ── CLICKABLE PIE LEGEND ROWS ───────────────────────────────────────────── */
+.dash-pie-row--clickable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px 5px;
+  margin: -3px -5px;
+  transition: background 0.12s;
+}
+
+.dash-pie-row--clickable:hover {
+  background: #18182e;
+}

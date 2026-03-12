@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import './ReviewQueue.css'
 
 function PhaseBar({ label, blunders, pct }) {
@@ -77,7 +77,7 @@ function GameRow({ game, username, onSelectGame }) {
   )
 }
 
-export default function ReviewQueue({ username, onSelectGame }) {
+export default function ReviewQueue({ username, appliedFilters = {}, onSelectGame }) {
   const [patterns, setPatterns] = useState(null)
   const [patternsLoading, setPatternsLoading] = useState(true)
   const [queue, setQueue] = useState(null)
@@ -85,14 +85,27 @@ export default function ReviewQueue({ username, onSelectGame }) {
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState('blunder_count')
   const [blundersOnly, setBlundersOnly] = useState(false)
+  const appliedFiltersRef = useRef(appliedFilters)
 
   const PAGE_SIZE = 50
 
+  // Keep ref in sync so callbacks always read latest filters
+  useEffect(() => { appliedFiltersRef.current = appliedFilters }, [appliedFilters])
+
   const fetchPatterns = useCallback(async () => {
     if (!username) return
+    const af = appliedFiltersRef.current
     setPatternsLoading(true)
     try {
-      const r = await fetch(`/api/mistake_patterns/${username}`)
+      const params = new URLSearchParams()
+      if (af.color) params.set('color', af.color)
+      if (af.outcome) params.set('outcome', af.outcome)
+      if (af.perf_type) params.set('perf_type', af.perf_type)
+      if (af.since_date) params.set('since_date', af.since_date)
+      if (af.until_date) params.set('until_date', af.until_date)
+      if (af.opening) params.set('opening', af.opening)
+      if (af.termination) params.set('termination', af.termination)
+      const r = await fetch(`/api/mistake_patterns/${username}?${params}`)
       setPatterns(await r.json())
     } catch {
       setPatterns(null)
@@ -103,9 +116,20 @@ export default function ReviewQueue({ username, onSelectGame }) {
 
   const fetchQueue = useCallback(async (p = 1, sort = sortBy) => {
     if (!username) return
+    const af = appliedFiltersRef.current
     setQueueLoading(true)
     try {
       const params = new URLSearchParams({ page: p, page_size: PAGE_SIZE, sort_by: sort })
+      if (af.color) params.set('color', af.color)
+      if (af.outcome) params.set('outcome', af.outcome)
+      if (af.perf_type) params.set('perf_type', af.perf_type)
+      if (af.since_date) params.set('since_date', af.since_date)
+      if (af.until_date) params.set('until_date', af.until_date)
+      if (af.opening) params.set('opening', af.opening)
+      if (af.termination) params.set('termination', af.termination)
+      if (af.min_moves) params.set('min_moves', af.min_moves)
+      if (af.max_moves) params.set('max_moves', af.max_moves)
+      if (af.bookmarked_only) params.set('bookmarked_only', 'true')
       const r = await fetch(`/api/review/${username}?${params}`)
       setQueue(await r.json())
       setPage(p)
@@ -119,7 +143,7 @@ export default function ReviewQueue({ username, onSelectGame }) {
   useEffect(() => {
     fetchPatterns()
     fetchQueue(1, sortBy)
-  }, [username]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [username, appliedFilters, fetchPatterns, fetchQueue]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSortChange = (newSort) => {
     setSortBy(newSort)

@@ -210,8 +210,11 @@ def get_games(
     bookmarked_only: bool = False,
     opening: Optional[str] = None,
     evaluated_only: bool = False,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ):
-    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only)
+    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only, termination, min_moves, max_moves)
 
 
 @app.get("/api/game/{username}/{game_id}")
@@ -241,8 +244,15 @@ def get_analytics(
     username: str,
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ):
-    return query_analytics(username, since_date, until_date)
+    return query_analytics(username, since_date, until_date, color, outcome, perf_type, opening, termination, min_moves, max_moves)
 
 
 # ── Review Queue ──────────────────────────────────────
@@ -259,11 +269,17 @@ def get_review_queue(
     until_date: Optional[str] = None,
     opening: Optional[str] = None,
     sort_by: str = "blunder_count",
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    bookmarked_only: bool = False,
 ):
     return compute_game_eval_summaries(
         username, page=page, page_size=page_size, color=color,
         outcome=outcome, perf_type=perf_type, since_date=since_date,
         until_date=until_date, opening=opening, sort_by=sort_by,
+        termination=termination, min_moves=min_moves, max_moves=max_moves,
+        bookmarked_only=bookmarked_only,
     )
 
 
@@ -276,10 +292,12 @@ def get_mistake_patterns(
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
     opening: Optional[str] = None,
+    termination: Optional[str] = None,
 ):
     return compute_mistake_patterns(
         username, color=color, outcome=outcome, perf_type=perf_type,
         since_date=since_date, until_date=until_date, opening=opening,
+        termination=termination,
     )
 
 
@@ -422,6 +440,73 @@ async def stream_eval_logs(username: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── SQL Editor ────────────────────────────────────────
+
+class SqlQueryRequest(BaseModel):
+    username: str
+    sql: str
+
+
+def _sql_duckdb_conn(username: str):
+    """Create an in-memory DuckDB connection with games and evals registered as views."""
+    import duckdb
+    from storage import get_games_dir, get_evals_dir, games_parquet_exists
+
+    con = duckdb.connect()
+    games_dir = get_games_dir(username)
+    evals_dir = get_evals_dir(username)
+
+    if games_dir.exists() and any(games_dir.glob("*.parquet")):
+        games_glob = str(games_dir / "*.parquet")
+        con.execute(f"CREATE VIEW games AS SELECT * FROM read_parquet('{games_glob}')")
+
+    if evals_dir.exists() and any(evals_dir.glob("*.parquet")):
+        evals_glob = str(evals_dir / "*.parquet")
+        con.execute(f"CREATE VIEW evals AS SELECT * FROM read_parquet('{evals_glob}')")
+
+    return con
+
+
+@app.get("/api/sql/schema/{username}")
+def get_sql_schema(username: str):
+    con = _sql_duckdb_conn(username)
+    tables = {}
+    try:
+        views = con.execute("SELECT table_name FROM information_schema.tables WHERE table_type = 'VIEW'").fetchall()
+        for (tname,) in views:
+            cols = con.execute(f"DESCRIBE {tname}").fetchall()
+            tables[tname] = [{"name": c[0], "type": c[1]} for c in cols]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        con.close()
+    return tables
+
+
+@app.post("/api/sql/query")
+def run_sql_query(req: SqlQueryRequest):
+    con = _sql_duckdb_conn(req.username)
+    try:
+        result = con.execute(req.sql)
+        columns = [desc[0] for desc in result.description]
+        rows = []
+        for row in result.fetchall():
+            serialized = {}
+            for col, val in zip(columns, row):
+                if hasattr(val, "isoformat"):
+                    serialized[col] = val.isoformat()
+                elif hasattr(val, "item"):
+                    serialized[col] = val.item()
+                else:
+                    serialized[col] = val
+            rows.append(serialized)
+        return {"columns": columns, "rows": rows, "error": None}
+    except Exception as e:
+        return {"columns": [], "rows": [], "error": str(e)}
+    finally:
+        con.close()
 
 
 # ── Health ────────────────────────────────────────────
