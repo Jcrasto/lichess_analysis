@@ -37,6 +37,11 @@ from storage import (
     save_bookmarks,
     compute_game_eval_summaries,
     compute_mistake_patterns,
+    query_reviews,
+    get_unreviewed_games,
+    query_review_by_game_id,
+    upsert_review,
+    get_reviews_path,
 )
 from etl import parse_pgn_to_games, run_incremental_etl, run_full_etl
 
@@ -45,10 +50,12 @@ LICHESS_API = "https://lichess.org/api"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Give the eval runner a reference to this event loop so its background
-    # thread can safely push log lines to SSE subscriber queues.
+    # Give background runners a reference to this event loop for SSE streaming.
     from eval_runner import runner as eval_runner
-    eval_runner.set_loop(asyncio.get_event_loop())
+    from review_runner import runner as review_runner
+    loop = asyncio.get_event_loop()
+    eval_runner.set_loop(loop)
+    review_runner.set_loop(loop)
 
     # Auto-migrate on startup if parquet missing but old JSON exists
     try:
@@ -301,6 +308,125 @@ def get_mistake_patterns(
     )
 
 
+# ── Reviews ───────────────────────────────────────────
+
+class ReviewRequest(BaseModel):
+    username: str
+    color: Optional[str] = None
+    outcome: Optional[str] = None
+    perf_type: Optional[str] = None
+    since_date: Optional[str] = None
+    until_date: Optional[str] = None
+    opening: Optional[str] = None
+    termination: Optional[str] = None
+    bookmarked_only: bool = False
+    force: bool = False
+
+
+@app.get("/api/reviews/{username}")
+def get_reviews(
+    username: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str = "blunder_count",
+    sort_dir: str = "desc",
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    bookmarked_only: bool = False,
+):
+    return query_reviews(
+        username, page=page, page_size=page_size,
+        sort_by=sort_by, sort_dir=sort_dir,
+        color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        termination=termination, min_moves=min_moves, max_moves=max_moves,
+        bookmarked_only=bookmarked_only,
+    )
+
+
+@app.get("/api/reviews/count/{username}")
+def get_unreviewed_count(username: str):
+    games = get_unreviewed_games(username)
+    return {"count": len(games)}
+
+
+@app.get("/api/reviews/status/{username}")
+def get_review_status(username: str):
+    from review_runner import runner as review_runner
+    status = review_runner.get_status()
+    try:
+        status["unreviewed"] = len(get_unreviewed_games(username))
+    except Exception:
+        status["unreviewed"] = 0
+    return status
+
+
+@app.post("/api/reviews/generate")
+def start_reviews(req: ReviewRequest):
+    from review_runner import runner as review_runner
+    filters = {
+        k: v for k, v in {
+            "color": req.color, "outcome": req.outcome, "perf_type": req.perf_type,
+            "since_date": req.since_date, "until_date": req.until_date,
+            "opening": req.opening, "termination": req.termination,
+            "bookmarked_only": req.bookmarked_only,
+        }.items() if v
+    }
+    started = review_runner.start(req.username, filters=filters, force=req.force)
+    if not started:
+        return {"started": False, "message": "Review generation already running"}
+    return {"started": True}
+
+
+@app.post("/api/reviews/stop")
+def stop_reviews():
+    from review_runner import runner as review_runner
+    if not review_runner.is_running:
+        return {"stopped": False, "message": "No review generation running"}
+    review_runner.stop()
+    return {"stopped": True}
+
+
+@app.get("/api/reviews/stream/{username}")
+async def stream_review_logs(username: str, request: Request):
+    from review_runner import runner as review_runner
+
+    async def generate():
+        q = review_runner.subscribe()
+        for line in list(review_runner.log_buffer):
+            yield f"data: {_json.dumps({'log': line})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    line = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {_json.dumps({'log': line})}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            review_runner.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/reviews/game/{username}/{game_id}")
+def get_review_for_game(username: str, game_id: str):
+    review = query_review_by_game_id(username, game_id)
+    return review or {}
+
+
 # ── Refresh ───────────────────────────────────────────
 
 async def _fetch_pgn(username: str, since_ms: Optional[int] = None) -> str:
@@ -465,6 +591,10 @@ def _sql_duckdb_conn(username: str):
     if evals_dir.exists() and any(evals_dir.glob("*.parquet")):
         evals_glob = str(evals_dir / "*.parquet")
         con.execute(f"CREATE VIEW evals AS SELECT * FROM read_parquet('{evals_glob}')")
+
+    reviews_path = get_reviews_path(username)
+    if reviews_path.exists():
+        con.execute(f"CREATE VIEW reviews AS SELECT * FROM read_parquet('{str(reviews_path)}')")
 
     return con
 

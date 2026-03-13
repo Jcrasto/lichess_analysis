@@ -41,6 +41,7 @@ export default function App() {
   const evalPollRef = useRef(null)
   const [selectedGame, setSelectedGame] = useState(null)
   const [selectedGameEvals, setSelectedGameEvals] = useState(null)
+  const [selectedGameReview, setSelectedGameReview] = useState(null)
 
   // Pending filters = what's shown in the sidebar UI (draft state)
   const [pendingFilters, setPendingFilters] = useState({ ...EMPTY_FILTERS })
@@ -279,10 +280,15 @@ export default function App() {
   const handleSelectGame = async (game) => {
     setSelectedGame(game)
     setSelectedGameEvals(null)
+    setSelectedGameReview(null)
     try {
-      const r = await fetch(`/api/evals/${defaultUser}/${game.game_id}`)
-      const evals = await r.json()
-      setSelectedGameEvals(evals)
+      const [evalsRes, reviewRes] = await Promise.all([
+        fetch(`/api/evals/${defaultUser}/${game.game_id}`),
+        fetch(`/api/reviews/game/${defaultUser}/${game.game_id}`),
+      ])
+      setSelectedGameEvals(await evalsRes.json())
+      const rev = await reviewRes.json()
+      setSelectedGameReview(rev && rev.text_summary ? rev : null)
     } catch {}
   }
 
@@ -664,7 +670,12 @@ export default function App() {
           game={selectedGame}
           username={defaultUser}
           evals={selectedGameEvals}
-          onClose={() => { setSelectedGame(null); setSelectedGameEvals(null) }}
+          review={selectedGameReview}
+          onClose={() => {
+            setSelectedGame(null)
+            setSelectedGameEvals(null)
+            setSelectedGameReview(null)
+          }}
         />
       )}
 

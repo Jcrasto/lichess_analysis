@@ -17,6 +17,11 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width 0.2s ease;
+}
+
+.detail-panel--expanded {
+  width: 90vw;
 }
 
 .detail-header {
@@ -94,6 +99,25 @@
 }
 
 .modal-close:hover { color: #d9d9d9; }
+
+.btn-expand {
+  background: #2a2825;
+  border: 1px solid #3a3834;
+  color: #9e9b8c;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.btn-expand:hover {
+  background: #3a3834;
+  color: #c8c5b0;
+}
 
 .detail-body {
   flex: 1;
@@ -235,4 +259,53 @@
   word-break: break-all;
   max-height: 200px;
   overflow-y: auto;
+}
+
+/* ── Shared badge styles (also used in review section) ── */
+
+.badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge-blunder  { background: rgba(224,80,80,0.15);   color: #e05050; }
+.badge-mistake  { background: rgba(201,120,32,0.15);   color: #c97820; }
+.badge-inaccuracy { background: rgba(240,192,64,0.15); color: #f0c040; }
+
+.drop-indicator { font-size: 11px; font-family: monospace; font-weight: 600; }
+.drop-blunder   { color: #e05050; }
+.drop-mistake   { color: #c97820; }
+.drop-inaccuracy { color: #f0c040; }
+
+/* ── Review section (full-width, like PGN) ── */
+
+.review-full-section {
+  border-top: 1px solid #2d2d2d;
+  padding-top: 16px;
+}
+
+.review-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.review-text {
+  background: #161512;
+  border: 1px solid #2d2d2d;
+  border-radius: 4px;
+  padding: 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #9e9b8c;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  max-height: 420px;
+  overflow-y: auto;
+  margin: 0;
 }

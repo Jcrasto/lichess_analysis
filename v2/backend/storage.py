@@ -358,7 +358,7 @@ def compute_game_eval_summaries(
     sql = f"""
         WITH evals_raw AS (
             SELECT game_id, move_number,
-                LEAST(GREATEST(cp_score, -1000), 1000) AS cp_capped,
+                LEAST(GREATEST(cp_score, -10.0), 10.0) AS cp_capped,
                 mate_in
             FROM read_parquet('{evals_glob}')
             WHERE cp_score IS NOT NULL
@@ -384,9 +384,9 @@ def compute_game_eval_summaries(
             SELECT game_id, move_number, cp_capped, prev_cp,
                 CASE
                     WHEN is_white = 1 AND move_number % 2 = 1 AND prev_cp IS NOT NULL
-                        THEN GREATEST(prev_cp - cp_capped, 0)
+                        THEN GREATEST((prev_cp - cp_capped) * 100, 0)
                     WHEN is_white = 0 AND move_number % 2 = 0 AND prev_cp IS NOT NULL
-                        THEN GREATEST(cp_capped - prev_cp, 0)
+                        THEN GREATEST((cp_capped - prev_cp) * 100, 0)
                     ELSE NULL
                 END AS user_drop_cp
             FROM evals_with_prev
@@ -454,7 +454,7 @@ def compute_mistake_patterns(
     base_cte = f"""
         WITH evals_raw AS (
             SELECT game_id, move_number,
-                LEAST(GREATEST(cp_score, -1000), 1000) AS cp_capped
+                LEAST(GREATEST(cp_score, -10.0), 10.0) AS cp_capped
             FROM read_parquet('{evals_glob}')
             WHERE cp_score IS NOT NULL
         ),
@@ -480,9 +480,9 @@ def compute_mistake_patterns(
             SELECT game_id, move_number, opening,
                 CASE
                     WHEN is_white = 1 AND move_number % 2 = 1 AND prev_cp IS NOT NULL
-                        THEN GREATEST(prev_cp - cp_capped, 0)
+                        THEN GREATEST((prev_cp - cp_capped) * 100, 0)
                     WHEN is_white = 0 AND move_number % 2 = 0 AND prev_cp IS NOT NULL
-                        THEN GREATEST(cp_capped - prev_cp, 0)
+                        THEN GREATEST((cp_capped - prev_cp) * 100, 0)
                     ELSE NULL
                 END AS user_drop_cp
             FROM evals_with_prev
@@ -543,7 +543,7 @@ def compute_mistake_patterns(
         WHERE t.game_count >= 3
         GROUP BY gb.opening, t.game_count
         ORDER BY blunder_rate DESC
-        LIMIT 10
+        LIMIT 5
     """).fetchall()
     worst_openings = [
         {"opening": r[0], "blunder_rate": float(r[1]), "games": int(r[2])}
@@ -784,3 +784,158 @@ def update_has_eval(username: str, game_id: str, value: bool = True):
         return
     df.loc[df["game_id"] == game_id, "has_eval"] = value
     write_month_parquet(username, year, month, df)
+
+
+# ── Reviews ────────────────────────────────────────────────────────────────────
+
+def get_reviews_path(username: str) -> Path:
+    return BASE_DIR / username / "processed" / "reviews" / "reviews.parquet"
+
+
+def upsert_review(username: str, review: dict):
+    """Insert or replace one review row in the reviews parquet."""
+    path = get_reviews_path(username)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df_new = pd.DataFrame([review])
+    if path.exists():
+        df_existing = pd.read_parquet(path)
+        df_existing = df_existing[df_existing["game_id"] != review["game_id"]]
+        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    else:
+        df_combined = df_new
+    df_combined.to_parquet(path, index=False)
+
+
+def query_reviews(
+    username: str,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: str = "blunder_count",
+    sort_dir: str = "desc",
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    bookmarked_only: bool = False,
+) -> dict:
+    reviews_path = get_reviews_path(username)
+    if not reviews_path.exists():
+        return {"no_reviews": True}
+    if not games_parquet_exists(username):
+        return {"no_data": True}
+
+    reviews_glob = str(reviews_path)
+    games_glob = str(get_games_dir(username) / "*.parquet")
+
+    conditions = _build_game_conditions(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        termination=termination, min_moves=min_moves, max_moves=max_moves,
+        bookmarked_only=bookmarked_only,
+    )
+    games_conditions = " AND ".join(conditions) if conditions else "TRUE"
+
+    VALID_SORTS = {"blunder_count", "mistake_count", "inaccuracy_count", "biggest_drop_cp", "date"}
+    sort_col = sort_by if sort_by in VALID_SORTS else "blunder_count"
+    sort_dir_sql = "ASC" if sort_dir.lower() == "asc" else "DESC"
+    # Always qualify date to avoid ambiguity with r.date in the reviews table
+    sort_col_sql = "g.date" if sort_col == "date" else sort_col
+    secondary_order = "" if sort_col == "date" else ", g.date DESC"
+
+    offset = (page - 1) * page_size
+
+    sql = f"""
+        SELECT r.game_id, r.blunder_count, r.mistake_count, r.inaccuracy_count,
+               r.biggest_drop_cp, r.critical_move_number, r.critical_phase,
+               r.reviewed_at,
+               g.white, g.black, g.white_elo, g.black_elo,
+               g.result, g.opening, g.perf_type, g.date, g.termination
+        FROM read_parquet('{reviews_glob}') r
+        JOIN (
+            SELECT * FROM read_parquet('{games_glob}')
+            WHERE {games_conditions}
+        ) g ON r.game_id = g.game_id
+        ORDER BY {sort_col_sql} {sort_dir_sql}{secondary_order}
+    """
+
+    con = duckdb.connect()
+    total = con.execute(f"SELECT COUNT(*) FROM ({sql})").fetchone()[0]
+    rows = con.execute(f"{sql} LIMIT {page_size} OFFSET {offset}").fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+
+    reviews = [_serialize_row(dict(zip(cols, row))) for row in rows]
+    return {"total": total, "page": page, "page_size": page_size, "reviews": reviews}
+
+
+def get_unreviewed_games(
+    username: str,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    bookmarked_only: bool = False,
+    force: bool = False,
+) -> list:
+    """Return evaluated games that don't have a review yet. If force=True, return all evaluated games."""
+    if not games_parquet_exists(username) or not evals_parquet_exists(username):
+        return []
+
+    games_glob = str(get_games_dir(username) / "*.parquet")
+    conditions = _build_game_conditions(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        evaluated_only=True, termination=termination, bookmarked_only=bookmarked_only,
+    )
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # Collect already-reviewed game_ids
+    reviews_path = get_reviews_path(username)
+    reviewed_ids: set = set()
+    if reviews_path.exists():
+        con = duckdb.connect()
+        rows = con.execute(
+            f"SELECT game_id FROM read_parquet('{str(reviews_path)}')"
+        ).fetchall()
+        con.close()
+        reviewed_ids = {r[0] for r in rows}
+
+    con = duckdb.connect()
+    rows = con.execute(
+        f"""SELECT game_id, date, year, month, white, black,
+                   white_elo, black_elo, result, opening, perf_type
+            FROM read_parquet('{games_glob}') {where_clause}
+            ORDER BY date DESC"""
+    ).fetchall()
+    cols = [d[0] for d in con.description]
+    con.close()
+
+    all_games = [_serialize_row(dict(zip(cols, row))) for row in rows]
+    if force:
+        return all_games
+    return [g for g in all_games if g["game_id"] not in reviewed_ids]
+
+
+def query_review_by_game_id(username: str, game_id: str) -> Optional[dict]:
+    reviews_path = get_reviews_path(username)
+    if not reviews_path.exists():
+        return None
+    con = duckdb.connect()
+    rows = con.execute(
+        f"SELECT * FROM read_parquet('{str(reviews_path)}') WHERE game_id = ?",
+        [game_id],
+    ).fetchall()
+    if not rows:
+        con.close()
+        return None
+    cols = [d[0] for d in con.description]
+    con.close()
+    return _serialize_row(dict(zip(cols, rows[0])))
