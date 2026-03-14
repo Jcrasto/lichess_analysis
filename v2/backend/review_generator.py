@@ -330,32 +330,8 @@ def _game_story(
         outcome = "Win" if result == "0-1" else ("Loss" if result == "1-0" else "Draw")
 
     full_moves = (total_moves + 1) // 2
-    opening    = game.get("opening") or "Unknown opening"
 
     parts = ["", "GAME STORY"]
-
-    # Opening sentence
-    early_eval, early_mn = None, None
-    for mn in range(20, 5, -1):
-        if mn in eval_map:
-            early_eval, early_mn = eval_map[mn], mn
-            break
-
-    if early_eval is not None:
-        ue = early_eval if is_white else -early_eval
-        if ue >= 1.5:
-            feel = f"you had a strong advantage (+{ue:.1f})"
-        elif ue >= 0.3:
-            feel = f"you held a slight edge (+{ue:.1f})"
-        elif ue >= -0.3:
-            feel = "the position was balanced"
-        elif ue >= -1.5:
-            feel = f"you were slightly worse ({ue:.1f})"
-        else:
-            feel = f"you were significantly worse ({ue:.1f})"
-        parts.append(f"  {opening}. By move {(early_mn + 1) // 2}, {feel}.")
-    else:
-        parts.append(f"  {opening}.")
 
     # ── Build event lookup structures ─────────────────────────────────────────
 
