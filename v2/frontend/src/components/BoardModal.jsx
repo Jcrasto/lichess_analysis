@@ -299,6 +299,16 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
           </div>
           <div className="bm-hactions">
             <button className="bm-btn" onClick={() => setFlipped(f => !f)}>⇅ Flip</button>
+            {game.game_id && (
+              <a
+                className="bm-btn"
+                href={`https://lichess.org/${game.game_id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                VIEW ON LICHESS ↗
+              </a>
+            )}
             <button className="bm-btn bm-close-btn" onClick={onClose}>✕</button>
           </div>
         </div>
@@ -330,6 +340,11 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
           <div className="bm-right">
             <div className="bm-moves-wrap">
               <div className="bm-panel-title">MOVES</div>
+              <div className="ml-player-header">
+                <span className="ml-num-spacer" />
+                <span className="ml-player-white">{game.white}</span>
+                <span className="ml-player-black">{game.black}</span>
+              </div>
               <MoveList plies={plies} currentPly={ply} onSelect={setPly} />
             </div>
 

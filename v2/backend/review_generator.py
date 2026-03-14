@@ -470,6 +470,7 @@ def _game_story(
         ply     = data
         full_mn = (ply + 1) // 2
         phase   = _phase(ply)
+        side_label = "White" if ply % 2 == 1 else "Black"
 
         # Current material string — name the player so it's unambiguous
         mat_str = ""
@@ -538,7 +539,7 @@ def _game_story(
                         cap = " No piece immediately lost — positional error."
 
                 parts.append(
-                    f"  Move {full_mn} ({phase}) — {actor}: {eval_str}.{cap}{best_str}{mat_str}"
+                    f"  {side_label} Move {full_mn} ({phase}) — {actor}: {eval_str}.{cap}{best_str}{mat_str}"
                 )
 
         elif ply in mat_change_plies:
@@ -570,7 +571,7 @@ def _game_story(
             else:
                 continue
 
-            parts.append(f"  Move {full_mn} ({phase}) — {desc}{mat_str}")
+            parts.append(f"  {side_label} Move {full_mn} ({phase}) — {desc}{mat_str}")
 
     # Closing line
     term = _termination_method(game, evals)
