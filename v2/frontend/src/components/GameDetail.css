@@ -279,6 +279,9 @@
 .drop-blunder   { color: #e05050; }
 .drop-mistake   { color: #c97820; }
 .drop-inaccuracy { color: #f0c040; }
+.acc-great      { color: #7ed87e; }
+.acc-ok         { color: #c97820; }
+.acc-poor       { color: #e05050; }
 
 /* ── Review section (full-width, like PGN) ── */
 

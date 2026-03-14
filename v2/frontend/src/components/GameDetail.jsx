@@ -219,12 +219,19 @@ export default function GameDetail({ game, username, evals, review, onClose, onM
                 {review.inaccuracy_count > 0 && (
                   <span className="badge badge-inaccuracy">🟡 ×{review.inaccuracy_count}</span>
                 )}
-                {review.biggest_drop_cp > 0 && (
+                {review.biggest_win_pct_drop > 0 && (
                   <span className={`drop-indicator ${
-                    review.biggest_drop_cp > 300 ? 'drop-blunder'
-                    : review.biggest_drop_cp > 150 ? 'drop-mistake'
+                    review.biggest_win_pct_drop > 20 ? 'drop-blunder'
+                    : review.biggest_win_pct_drop > 10 ? 'drop-mistake'
                     : 'drop-inaccuracy'
-                  }`}>⬇ {review.biggest_drop_cp}cp</span>
+                  }`}>⬇ {review.biggest_win_pct_drop.toFixed(1)}%</span>
+                )}
+                {review.lichess_accuracy_percentage > 0 && (
+                  <span className={`drop-indicator ${
+                    review.lichess_accuracy_percentage >= 80 ? 'acc-great'
+                    : review.lichess_accuracy_percentage >= 60 ? 'acc-ok'
+                    : 'acc-poor'
+                  }`}>acc {review.lichess_accuracy_percentage.toFixed(1)}%</span>
                 )}
               </div>
               <pre className="review-text">{review.text_summary}</pre>

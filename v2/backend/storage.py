@@ -820,8 +820,17 @@ def upsert_review(username: str, review: dict):
 def _ensure_is_reviewed_column(reviews_path: Path):
     """Add is_reviewed column (default False) to reviews parquet if missing."""
     df = pd.read_parquet(reviews_path)
+    changed = False
     if "is_reviewed" not in df.columns:
         df["is_reviewed"] = False
+        changed = True
+    if "biggest_win_pct_drop" not in df.columns:
+        df["biggest_win_pct_drop"] = 0.0
+        changed = True
+    if "lichess_accuracy_percentage" not in df.columns:
+        df["lichess_accuracy_percentage"] = 0.0
+        changed = True
+    if changed:
         df.to_parquet(reviews_path, index=False)
 
 
@@ -864,7 +873,10 @@ def query_reviews(
 
     reviews_filter = "AND COALESCE(r.is_reviewed, FALSE) = FALSE" if only_unreviewed else ""
 
-    VALID_SORTS = {"blunder_count", "mistake_count", "inaccuracy_count", "biggest_drop_cp", "date"}
+    VALID_SORTS = {
+        "blunder_count", "mistake_count", "inaccuracy_count",
+        "biggest_drop_cp", "biggest_win_pct_drop", "lichess_accuracy_percentage", "date",
+    }
     sort_col = sort_by if sort_by in VALID_SORTS else "blunder_count"
     sort_dir_sql = "ASC" if sort_dir.lower() == "asc" else "DESC"
     sort_col_sql = "g.date" if sort_col == "date" else sort_col
@@ -874,7 +886,10 @@ def query_reviews(
 
     sql = f"""
         SELECT r.game_id, r.blunder_count, r.mistake_count, r.inaccuracy_count,
-               r.biggest_drop_cp, r.critical_move_number, r.critical_phase,
+               r.biggest_drop_cp,
+               COALESCE(r.biggest_win_pct_drop, 0.0) AS biggest_win_pct_drop,
+               COALESCE(r.lichess_accuracy_percentage, 0.0) AS lichess_accuracy_percentage,
+               r.critical_move_number, r.critical_phase,
                r.reviewed_at, r.is_reviewed,
                g.white, g.black, g.white_elo, g.black_elo,
                g.result, g.opening, g.perf_type, g.date, g.termination

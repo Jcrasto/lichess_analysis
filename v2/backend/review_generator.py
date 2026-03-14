@@ -1,4 +1,5 @@
 """Deterministic text summary generation for chess game reviews."""
+import math
 from typing import Optional
 
 import chess
@@ -12,6 +13,18 @@ MISTAKE_THRESH = 1.5
 INACCURACY_THRESH = 0.5
 
 _PIECE_VALUES = {'P': 1, 'N': 3, 'B': 3, 'R': 5, 'Q': 9}
+
+
+def _win_pct(cp_pawns: float) -> float:
+    """Convert cp_score (in pawns, white-positive) to white win% (0–100)."""
+    cp = cp_pawns * 100  # to centipawns
+    return 50 + 50 * (2 / (1 + math.exp(-0.00368208 * cp)) - 1)
+
+
+def _accuracy_pct(wp_before: float, wp_after: float) -> float:
+    """Lichess accuracy% for one move given win% before/after (player's perspective)."""
+    raw = 103.1668 * math.exp(-0.04354 * (wp_before - wp_after)) - 3.1669
+    return max(0.0, min(100.0, raw))
 
 
 def _material_balance(fen: str) -> int:
@@ -71,7 +84,7 @@ def _sign(n: float) -> str:
 
 
 def _compute_drops(eval_map: dict, for_white: bool) -> list:
-    """Return all drops >= INACCURACY_THRESH for one side."""
+    """Return all drops >= INACCURACY_THRESH for one side, with win%/accuracy data."""
     drops = []
     for mn in sorted(eval_map.keys()):
         if mn == 0:
@@ -85,6 +98,15 @@ def _compute_drops(eval_map: dict, for_white: bool) -> list:
         if this_move_white != for_white:
             continue
         drop = (prev_cp - curr_cp) if for_white else (curr_cp - prev_cp)
+        # Win% from the player's perspective (0–100)
+        if for_white:
+            wp_before = _win_pct(prev_cp)
+            wp_after  = _win_pct(curr_cp)
+        else:
+            wp_before = 100.0 - _win_pct(prev_cp)
+            wp_after  = 100.0 - _win_pct(curr_cp)
+        wp_drop  = max(0.0, wp_before - wp_after)
+        accuracy = _accuracy_pct(wp_before, wp_after)
         if drop >= INACCURACY_THRESH:
             drops.append({
                 "move": mn,
@@ -92,6 +114,10 @@ def _compute_drops(eval_map: dict, for_white: bool) -> list:
                 "before": prev_cp,
                 "after": curr_cp,
                 "phase": _phase(mn),
+                "wp_before": wp_before,
+                "wp_after":  wp_after,
+                "wp_drop":   wp_drop,
+                "accuracy":  accuracy,
             })
     return drops
 
@@ -413,21 +439,21 @@ def _game_story(
             else:
                 adv_str = "Material is equal."
 
-            # Eval at this checkpoint
+            # Win% at this checkpoint
             eval_str = ""
             if closest_ply in eval_map:
                 raw_eval = eval_map[closest_ply]
-                ue = raw_eval if is_white else -raw_eval
-                if ue >= 1.5:
-                    eval_str = f" Eval: {username} +{ue:.1f}."
-                elif ue >= 0.3:
-                    eval_str = f" Eval: slight edge for {username} (+{ue:.1f})."
-                elif ue >= -0.3:
-                    eval_str = f" Eval: balanced ({ue:+.2f})."
-                elif ue >= -1.5:
-                    eval_str = f" Eval: slight edge for {opponent} ({ue:.1f})."
+                user_wp = _win_pct(raw_eval) if is_white else 100.0 - _win_pct(raw_eval)
+                if user_wp >= 65:
+                    eval_str = f" Win%: {username} {user_wp:.1f}%."
+                elif user_wp >= 55:
+                    eval_str = f" Win%: slight edge for {username} ({user_wp:.1f}%)."
+                elif user_wp >= 45:
+                    eval_str = f" Win%: balanced ({user_wp:.1f}%)."
+                elif user_wp >= 35:
+                    eval_str = f" Win%: slight edge for {opponent} ({user_wp:.1f}%)."
                 else:
-                    eval_str = f" Eval: {opponent} +{abs(ue):.1f}."
+                    eval_str = f" Win%: {opponent} favoured ({user_wp:.1f}%)."
 
             parts.append(
                 f"  ── After move {fm} ({since_label}) ──"
@@ -460,15 +486,15 @@ def _game_story(
 
         if ply in error_by_ply:
             for is_user_event, d in sorted(error_by_ply[ply], key=lambda x: not x[0]):
-                drop_cp   = int(round(d["drop"] * 100))
                 err_label = (
                     "Blunder"    if d["drop"] >= BLUNDER_THRESH
                     else "Mistake"    if d["drop"] >= MISTAKE_THRESH
                     else "Inaccuracy"
                 )
-                before_u = d["before"] if is_white else -d["before"]
-                after_u  = d["after"]  if is_white else -d["after"]
-                eval_str = f"eval {_sign(before_u)} → {_sign(after_u)} ({drop_cp}cp)"
+                eval_str = (
+                    f"win% {d['wp_before']:.1f}→{d['wp_after']:.1f} "
+                    f"(-{d['wp_drop']:.1f}%) | acc {d['accuracy']:.1f}%"
+                )
 
                 # Best move: what should have been played (from the position before this ply)
                 best_uci = best_move_map.get(ply - 1)
@@ -612,10 +638,32 @@ def generate_review(game: dict, evals: list, username: str) -> dict:
     opp_mistakes     = [d for d in opp_drops if MISTAKE_THRESH <= d["drop"] < BLUNDER_THRESH]
     opp_inaccuracies = [d for d in opp_drops if INACCURACY_THRESH <= d["drop"] < MISTAKE_THRESH]
 
-    biggest = max(user_drops, key=lambda d: d["drop"]) if user_drops else None
+    biggest = max(user_drops, key=lambda d: d["wp_drop"]) if user_drops else None
     biggest_drop_cp = int(round(biggest["drop"] * 100)) if biggest else 0
+    biggest_win_pct_drop = round(biggest["wp_drop"], 2) if biggest else 0.0
     critical_move = biggest["move"] if biggest else None
     critical_phase = biggest["phase"] if biggest else None
+
+    # Average Lichess accuracy across all user moves
+    all_accuracies = []
+    for mn in sorted(eval_map.keys()):
+        if mn == 0:
+            continue
+        prev_mn = mn - 1
+        if prev_mn not in eval_map:
+            continue
+        if (mn % 2 == 1) != is_white:
+            continue
+        prev_cp = eval_map[prev_mn]
+        curr_cp = eval_map[mn]
+        if is_white:
+            wp_b = _win_pct(prev_cp)
+            wp_a = _win_pct(curr_cp)
+        else:
+            wp_b = 100.0 - _win_pct(prev_cp)
+            wp_a = 100.0 - _win_pct(curr_cp)
+        all_accuracies.append(_accuracy_pct(wp_b, wp_a))
+    lichess_accuracy_percentage = round(sum(all_accuracies) / len(all_accuracies), 1) if all_accuracies else 0.0
 
     text = _build_text(
         game, is_white, total_moves,
@@ -630,6 +678,8 @@ def generate_review(game: dict, evals: list, username: str) -> dict:
         "mistake_count": len(mistakes),
         "inaccuracy_count": len(inaccuracies),
         "biggest_drop_cp": biggest_drop_cp,
+        "biggest_win_pct_drop": biggest_win_pct_drop,
+        "lichess_accuracy_percentage": lichess_accuracy_percentage,
         "critical_move_number": critical_move,
         "critical_phase": critical_phase,
         "text_summary": text,
@@ -642,6 +692,8 @@ def _empty_review() -> dict:
         "mistake_count": 0,
         "inaccuracy_count": 0,
         "biggest_drop_cp": 0,
+        "biggest_win_pct_drop": 0.0,
+        "lichess_accuracy_percentage": 0.0,
         "critical_move_number": None,
         "critical_phase": None,
         "text_summary": "No evaluation data available.",
