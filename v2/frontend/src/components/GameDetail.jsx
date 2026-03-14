@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import './GameDetail.css'
 
 function HeaderRow({ label, value }) {
@@ -104,7 +105,9 @@ function evalColor(ev) {
   return 'eval-neutral'
 }
 
-export default function GameDetail({ game, username, evals, onClose }) {
+export default function GameDetail({ game, username, evals, review, onClose, onMarkReviewed }) {
+  const [expanded, setExpanded] = useState(false)
+  const [markingReviewed, setMarkingReviewed] = useState(false)
   const movesWithEvals = injectEvals(game.moves, evals)
   const moves = formatMoves(movesWithEvals)
   const isWhite = game.white?.toLowerCase() === username?.toLowerCase()
@@ -112,7 +115,7 @@ export default function GameDetail({ game, username, evals, onClose }) {
 
   return (
     <div className="detail-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="detail-panel">
+      <div className={`detail-panel ${expanded ? 'detail-panel--expanded' : ''}`}>
         <div className="detail-header">
           <div>
             <div className="detail-players">
@@ -135,6 +138,11 @@ export default function GameDetail({ game, username, evals, onClose }) {
                 VIEW ON LICHESS ↗
               </a>
             )}
+            <button
+              className="btn-expand"
+              onClick={() => setExpanded(e => !e)}
+              title={expanded ? 'Collapse panel' : 'Expand panel'}
+            >{expanded ? '↙ Collapse' : '↖ Expand'}</button>
             <button className="modal-close" onClick={onClose}>✕</button>
           </div>
         </div>
@@ -182,6 +190,46 @@ export default function GameDetail({ game, username, evals, onClose }) {
             <div className="pgn-title">RAW PGN</div>
             <pre className="pgn-raw">{game.pgn}</pre>
           </div>
+
+          {review && review.text_summary && (
+            <div className="review-full-section">
+              <div className="review-section-header">
+                <div className="pgn-title">REVIEW</div>
+                {onMarkReviewed && (
+                  <button
+                    className={`btn-mark-reviewed ${review.is_reviewed ? 'btn-mark-unreviewed' : ''}`}
+                    disabled={markingReviewed}
+                    onClick={async () => {
+                      setMarkingReviewed(true)
+                      await onMarkReviewed(game.game_id, !review.is_reviewed)
+                      setMarkingReviewed(false)
+                    }}
+                  >
+                    {review.is_reviewed ? 'Mark as Unreviewed' : 'Mark as Reviewed'}
+                  </button>
+                )}
+              </div>
+              <div className="review-badges">
+                {review.blunder_count > 0 && (
+                  <span className="badge badge-blunder">🔴 ×{review.blunder_count}</span>
+                )}
+                {review.mistake_count > 0 && (
+                  <span className="badge badge-mistake">🟠 ×{review.mistake_count}</span>
+                )}
+                {review.inaccuracy_count > 0 && (
+                  <span className="badge badge-inaccuracy">🟡 ×{review.inaccuracy_count}</span>
+                )}
+                {review.biggest_drop_cp > 0 && (
+                  <span className={`drop-indicator ${
+                    review.biggest_drop_cp > 300 ? 'drop-blunder'
+                    : review.biggest_drop_cp > 150 ? 'drop-mistake'
+                    : 'drop-inaccuracy'
+                  }`}>⬇ {review.biggest_drop_cp}cp</span>
+                )}
+              </div>
+              <pre className="review-text">{review.text_summary}</pre>
+            </div>
+          )}
         </div>
       </div>
     </div>

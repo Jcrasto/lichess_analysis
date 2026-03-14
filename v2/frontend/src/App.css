@@ -427,6 +427,13 @@ body {
   min-height: 0;
 }
 
+.sql-tab-wrap {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+  display: flex;
+}
+
 /* ── MAIN ─────────────────────────────────────────── */
 .main {
   flex: 1;
@@ -553,3 +560,92 @@ body {
   color: #666;
   font-size: 14px;
 }
+
+/* ── FILTER ACTIONS (Apply / Discard) ──────────────────── */
+.filter-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.btn-apply-filters {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #1e3a1e;
+  border: 1px solid #4caf79;
+  color: #4caf79;
+  padding: 10px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-apply-filters:hover {
+  background: #264a26;
+  border-color: #6dcf95;
+  color: #6dcf95;
+}
+
+.btn-discard-filters {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: #2d2d2d;
+  border: 1px solid #555;
+  color: #777;
+  padding: 7px 14px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  width: 100%;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.btn-discard-filters:hover {
+  background: #363636;
+  border-color: #777;
+  color: #aaa;
+}
+
+/* ── MOVES FILTER ─────────────────────────────────────── */
+.moves-filter-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.moves-filter-label {
+  font-size: 10px;
+  color: #555;
+  letter-spacing: 0.05em;
+}
+
+.moves-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.moves-input {
+  flex: 1;
+  min-width: 0;
+  background: #2d2d2d;
+  border: 1px solid #3d3d3d;
+  color: #d9d9d9;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.moves-input:focus { border-color: #6a9955; }

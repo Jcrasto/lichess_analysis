@@ -35,6 +35,14 @@ from storage import (
     query_unique_openings,
     load_bookmarks,
     save_bookmarks,
+    compute_game_eval_summaries,
+    compute_mistake_patterns,
+    query_reviews,
+    get_unreviewed_games,
+    query_review_by_game_id,
+    upsert_review,
+    get_reviews_path,
+    mark_review_status,
 )
 from etl import parse_pgn_to_games, run_incremental_etl, run_full_etl
 
@@ -43,10 +51,12 @@ LICHESS_API = "https://lichess.org/api"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Give the eval runner a reference to this event loop so its background
-    # thread can safely push log lines to SSE subscriber queues.
+    # Give background runners a reference to this event loop for SSE streaming.
     from eval_runner import runner as eval_runner
-    eval_runner.set_loop(asyncio.get_event_loop())
+    from review_runner import runner as review_runner
+    loop = asyncio.get_event_loop()
+    eval_runner.set_loop(loop)
+    review_runner.set_loop(loop)
 
     # Auto-migrate on startup if parquet missing but old JSON exists
     try:
@@ -86,6 +96,7 @@ class RefreshRequest(BaseModel):
 class EvalRequest(BaseModel):
     username: str
     depth: int = 15
+    workers: Optional[int] = None  # None = auto-detect physical cores
     color: Optional[str] = None
     outcome: Optional[str] = None
     perf_type: Optional[str] = None
@@ -207,8 +218,11 @@ def get_games(
     bookmarked_only: bool = False,
     opening: Optional[str] = None,
     evaluated_only: bool = False,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ):
-    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only)
+    return query_games(username, page, page_size, color, result, outcome, perf_type, since_date, until_date, bookmarked_only, opening, evaluated_only, termination, min_moves, max_moves)
 
 
 @app.get("/api/game/{username}/{game_id}")
@@ -238,8 +252,193 @@ def get_analytics(
     username: str,
     since_date: Optional[str] = None,
     until_date: Optional[str] = None,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
 ):
-    return query_analytics(username, since_date, until_date)
+    return query_analytics(username, since_date, until_date, color, outcome, perf_type, opening, termination, min_moves, max_moves)
+
+
+# ── Review Queue ──────────────────────────────────────
+
+@app.get("/api/review/{username}")
+def get_review_queue(
+    username: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    sort_by: str = "blunder_count",
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    bookmarked_only: bool = False,
+):
+    return compute_game_eval_summaries(
+        username, page=page, page_size=page_size, color=color,
+        outcome=outcome, perf_type=perf_type, since_date=since_date,
+        until_date=until_date, opening=opening, sort_by=sort_by,
+        termination=termination, min_moves=min_moves, max_moves=max_moves,
+        bookmarked_only=bookmarked_only,
+    )
+
+
+@app.get("/api/mistake_patterns/{username}")
+def get_mistake_patterns(
+    username: str,
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+):
+    return compute_mistake_patterns(
+        username, color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        termination=termination,
+    )
+
+
+# ── Reviews ───────────────────────────────────────────
+
+class ReviewRequest(BaseModel):
+    username: str
+    color: Optional[str] = None
+    outcome: Optional[str] = None
+    perf_type: Optional[str] = None
+    since_date: Optional[str] = None
+    until_date: Optional[str] = None
+    opening: Optional[str] = None
+    termination: Optional[str] = None
+    bookmarked_only: bool = False
+    force: bool = False
+
+
+@app.get("/api/reviews/{username}")
+def get_reviews(
+    username: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str = "blunder_count",
+    sort_dir: str = "desc",
+    color: Optional[str] = None,
+    outcome: Optional[str] = None,
+    perf_type: Optional[str] = None,
+    since_date: Optional[str] = None,
+    until_date: Optional[str] = None,
+    opening: Optional[str] = None,
+    termination: Optional[str] = None,
+    min_moves: Optional[int] = None,
+    max_moves: Optional[int] = None,
+    bookmarked_only: bool = False,
+    only_unreviewed: bool = True,
+):
+    return query_reviews(
+        username, page=page, page_size=page_size,
+        sort_by=sort_by, sort_dir=sort_dir,
+        color=color, outcome=outcome, perf_type=perf_type,
+        since_date=since_date, until_date=until_date, opening=opening,
+        termination=termination, min_moves=min_moves, max_moves=max_moves,
+        bookmarked_only=bookmarked_only, only_unreviewed=only_unreviewed,
+    )
+
+
+@app.get("/api/reviews/count/{username}")
+def get_unreviewed_count(username: str):
+    games = get_unreviewed_games(username)
+    return {"count": len(games)}
+
+
+@app.get("/api/reviews/status/{username}")
+def get_review_status(username: str):
+    from review_runner import runner as review_runner
+    status = review_runner.get_status()
+    try:
+        status["unreviewed"] = len(get_unreviewed_games(username))
+    except Exception:
+        status["unreviewed"] = 0
+    return status
+
+
+@app.post("/api/reviews/generate")
+def start_reviews(req: ReviewRequest):
+    from review_runner import runner as review_runner
+    filters = {
+        k: v for k, v in {
+            "color": req.color, "outcome": req.outcome, "perf_type": req.perf_type,
+            "since_date": req.since_date, "until_date": req.until_date,
+            "opening": req.opening, "termination": req.termination,
+            "bookmarked_only": req.bookmarked_only,
+        }.items() if v
+    }
+    started = review_runner.start(req.username, filters=filters, force=req.force)
+    if not started:
+        return {"started": False, "message": "Review generation already running"}
+    return {"started": True}
+
+
+@app.post("/api/reviews/stop")
+def stop_reviews():
+    from review_runner import runner as review_runner
+    if not review_runner.is_running:
+        return {"stopped": False, "message": "No review generation running"}
+    review_runner.stop()
+    return {"stopped": True}
+
+
+@app.get("/api/reviews/stream/{username}")
+async def stream_review_logs(username: str, request: Request):
+    from review_runner import runner as review_runner
+
+    async def generate():
+        q = review_runner.subscribe()
+        for line in list(review_runner.log_buffer):
+            yield f"data: {_json.dumps({'log': line})}\n\n"
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    line = await asyncio.wait_for(q.get(), timeout=15.0)
+                    yield f"data: {_json.dumps({'log': line})}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            review_runner.unsubscribe(q)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.get("/api/reviews/game/{username}/{game_id}")
+def get_review_for_game(username: str, game_id: str):
+    review = query_review_by_game_id(username, game_id)
+    return review or {}
+
+
+class MarkReviewRequest(BaseModel):
+    is_reviewed: bool
+
+
+@app.post("/api/reviews/game/{username}/{game_id}/mark")
+def mark_review(username: str, game_id: str, req: MarkReviewRequest):
+    found = mark_review_status(username, game_id, req.is_reviewed)
+    if not found:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return {"game_id": game_id, "is_reviewed": req.is_reviewed}
 
 
 # ── Refresh ───────────────────────────────────────────
@@ -338,7 +537,7 @@ async def start_evaluate(req: EvalRequest):
         "bookmarked_only": req.bookmarked_only, "opening": req.opening,
     }
     try:
-        started = runner.start(req.username, req.depth, filters)
+        started = runner.start(req.username, req.depth, filters, workers=req.workers)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
     if not started:
@@ -381,6 +580,77 @@ async def stream_eval_logs(username: str, request: Request):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── SQL Editor ────────────────────────────────────────
+
+class SqlQueryRequest(BaseModel):
+    username: str
+    sql: str
+
+
+def _sql_duckdb_conn(username: str):
+    """Create an in-memory DuckDB connection with games and evals registered as views."""
+    import duckdb
+    from storage import get_games_dir, get_evals_dir, games_parquet_exists
+
+    con = duckdb.connect()
+    games_dir = get_games_dir(username)
+    evals_dir = get_evals_dir(username)
+
+    if games_dir.exists() and any(games_dir.glob("*.parquet")):
+        games_glob = str(games_dir / "*.parquet")
+        con.execute(f"CREATE VIEW games AS SELECT * FROM read_parquet('{games_glob}')")
+
+    if evals_dir.exists() and any(evals_dir.glob("*.parquet")):
+        evals_glob = str(evals_dir / "*.parquet")
+        con.execute(f"CREATE VIEW evals AS SELECT * FROM read_parquet('{evals_glob}')")
+
+    reviews_path = get_reviews_path(username)
+    if reviews_path.exists():
+        con.execute(f"CREATE VIEW reviews AS SELECT * FROM read_parquet('{str(reviews_path)}')")
+
+    return con
+
+
+@app.get("/api/sql/schema/{username}")
+def get_sql_schema(username: str):
+    con = _sql_duckdb_conn(username)
+    tables = {}
+    try:
+        views = con.execute("SELECT table_name FROM information_schema.tables WHERE table_type = 'VIEW'").fetchall()
+        for (tname,) in views:
+            cols = con.execute(f"DESCRIBE {tname}").fetchall()
+            tables[tname] = [{"name": c[0], "type": c[1]} for c in cols]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        con.close()
+    return tables
+
+
+@app.post("/api/sql/query")
+def run_sql_query(req: SqlQueryRequest):
+    con = _sql_duckdb_conn(req.username)
+    try:
+        result = con.execute(req.sql)
+        columns = [desc[0] for desc in result.description]
+        rows = []
+        for row in result.fetchall():
+            serialized = {}
+            for col, val in zip(columns, row):
+                if hasattr(val, "isoformat"):
+                    serialized[col] = val.isoformat()
+                elif hasattr(val, "item"):
+                    serialized[col] = val.item()
+                else:
+                    serialized[col] = val
+            rows.append(serialized)
+        return {"columns": columns, "rows": rows, "error": None}
+    except Exception as e:
+        return {"columns": [], "rows": [], "error": str(e)}
+    finally:
+        con.close()
 
 
 # ── Health ────────────────────────────────────────────
