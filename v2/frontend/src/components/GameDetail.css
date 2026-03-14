@@ -72,6 +72,21 @@
   flex-shrink: 0;
 }
 
+.btn-board {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #6a9fd8;
+  background: none;
+  border: 1px solid #4a7ab8;
+  padding: 4px 10px;
+  border-radius: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-board:hover { background: rgba(74, 122, 184, 0.15); }
+
 .btn-lichess {
   font-size: 11px;
   font-weight: 600;
