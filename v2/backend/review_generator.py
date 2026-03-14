@@ -1,6 +1,12 @@
 """Deterministic text summary generation for chess game reviews."""
 from typing import Optional
 
+import chess
+import chess.pgn
+
+_STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+_CHECKPOINT_INTERVAL = 5  # full moves
+
 BLUNDER_THRESH = 3.0    # pawns (cp_score is stored in pawns)
 MISTAKE_THRESH = 1.5
 INACCURACY_THRESH = 0.5
@@ -259,26 +265,64 @@ def _piece_list(pieces: list) -> str:
     return ", ".join(pieces[:-1]) + " and " + pieces[-1]
 
 
+def _piece_summary(pieces: list) -> str:
+    """Summarise a list of piece names with counts: ['pawn','pawn','knight'] → '2 pawns and a knight'."""
+    if not pieces:
+        return "nothing"
+    order = ["queen", "rook", "bishop", "knight", "pawn"]
+    counts: dict = {}
+    for p in pieces:
+        counts[p] = counts.get(p, 0) + 1
+    parts = []
+    for p in order:
+        n = counts.get(p, 0)
+        if n:
+            parts.append(f"a {p}" if n == 1 else f"{n} {p}s")
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def _uci_to_san(uci: str, fen: str) -> str:
+    """Convert a UCI move string to SAN given the board FEN. Falls back to UCI on error."""
+    try:
+        board = chess.Board(fen)
+        move  = chess.Move.from_uci(uci)
+        return board.san(move)
+    except Exception:
+        return uci
+
+
 def _game_story(
     game: dict,
     is_white: bool,
     total_moves: int,
     blunders: list,
     mistakes: list,
+    inaccuracies: list,
     opp_blunders: list,
     opp_mistakes: list,
+    opp_inaccuracies: list,
     eval_map: dict,
     material_map: dict,
     evals: list,
 ) -> list:
-    """Return the GAME STORY section as a list of text lines."""
+    """Return the GAME STORY section as a complete chronological log."""
     fen_map = {
         e["move_number"]: e["fen"]
         for e in evals
         if e.get("move_number") is not None and e.get("fen")
     }
+    # best_move at ply N = best move from the position AFTER ply N.
+    # For an error at ply N, the best alternative = best_move_map[N-1].
+    best_move_map = {
+        e["move_number"]: e.get("best_move")
+        for e in evals
+        if e.get("move_number") is not None
+    }
 
     opponent  = game.get("black" if is_white else "white") or "opponent"
+    username  = game.get("white" if is_white else "black") or "you"
     result    = game.get("result", "?")
     if is_white:
         outcome = "Win" if result == "1-0" else ("Loss" if result == "0-1" else "Draw")
@@ -313,88 +357,218 @@ def _game_story(
     else:
         parts.append(f"  {opening}.")
 
-    # All significant events (blunders + mistakes) from both sides, in order
-    events = (
-        [(d["move"], True, d)  for d in blunders + mistakes] +
-        [(d["move"], False, d) for d in opp_blunders + opp_mistakes]
-    )
-    events.sort(key=lambda x: x[0])
+    # ── Build event lookup structures ─────────────────────────────────────────
 
-    if not events:
-        parts.append(
-            "  No major errors from either side — "
-            "the game was decided by small, accumulated differences."
-        )
-    else:
-        for mn, is_user_event, d in events:
-            full_mn   = (mn + 1) // 2
-            drop_cp   = int(round(d["drop"] * 100))
-            err_label = "Blunder" if d["drop"] >= BLUNDER_THRESH else "Mistake"
-            phase     = d["phase"]
+    # error_by_ply: ply → [(is_user, drop_dict)]
+    error_by_ply: dict = {}
+    for d in blunders + mistakes + inaccuracies:
+        error_by_ply.setdefault(d["move"], []).append((True, d))
+    for d in opp_blunders + opp_mistakes + opp_inaccuracies:
+        error_by_ply.setdefault(d["move"], []).append((False, d))
 
-            # Eval from user's perspective (positive = good for user)
-            before_user = d["before"] if is_white else -d["before"]
-            after_user  = d["after"]  if is_white else -d["after"]
-            eval_str    = f"eval {_sign(before_user)} → {_sign(after_user)} ({drop_cp}cp)"
+    # mat_change_plies: plies where material changed
+    sorted_mat_plies = sorted(material_map.keys())
+    mat_change_plies: set = set()
+    prev_mat_ply = None
+    for ply in sorted_mat_plies:
+        if prev_mat_ply is not None and material_map[ply] != material_map[prev_mat_ply]:
+            mat_change_plies.add(ply)
+        prev_mat_ply = ply
 
-            # Detect pieces lost on this move AND the next (catches hanging-piece blunders)
-            user_lost: list = []
-            opp_lost:  list = []
-            for check_mn in (mn, mn + 1):
-                fa = fen_map.get(check_mn - 1)
-                fb = fen_map.get(check_mn)
-                if fa and fb:
-                    wl, bl = _pieces_lost(fa, fb)
-                    ul = wl if is_white else bl
-                    ol = bl if is_white else wl
-                    user_lost.extend(ul)
-                    opp_lost.extend(ol)
+    # checkpoint_plies: every _CHECKPOINT_INTERVAL full moves, keyed as ply + 0.5
+    # so they sort AFTER the last event of that full move
+    checkpoint_plies = []
+    for fm in range(_CHECKPOINT_INTERVAL, full_moves + _CHECKPOINT_INTERVAL, _CHECKPOINT_INTERVAL):
+        cp_fm = min(fm, full_moves)
+        checkpoint_plies.append(cp_fm * 2 + 0.5)
 
-            # Material balance right after the blunder move
-            mat_str = ""
-            if mn in material_map:
-                user_mat = material_map[mn] if is_white else -material_map[mn]
-                if user_mat > 0:
-                    mat_str = f" You were up {user_mat}pt{'s' if user_mat != 1 else ''} in material."
-                elif user_mat < 0:
-                    mat_str = (
-                        f" You were down {abs(user_mat)}pt{'s' if abs(user_mat) != 1 else ''} "
-                        f"in material ({_material_desc(user_mat)})."
-                    )
-                else:
-                    mat_str = " Material was equal."
+    # Unified sorted event list: (sort_key, kind, data)
+    # kind: "error_or_mat" (int ply) or "checkpoint" (float ply)
+    all_events: list = []
+    for ply in sorted(set(error_by_ply.keys()) | mat_change_plies):
+        all_events.append((ply, "move", ply))
+    for cp_key in checkpoint_plies:
+        fm = int((cp_key - 0.5) // 2)
+        all_events.append((cp_key, "checkpoint", fm))
+    all_events.sort(key=lambda x: x[0])
 
-            # Narrative for the capture / exchange
-            if is_user_event:
-                actor = f"Your {err_label.lower()}"
-                if user_lost and opp_lost:
-                    cap = (
-                        f" You traded your {_piece_list(user_lost)} "
-                        f"for {opponent}'s {_piece_list(opp_lost)}."
-                    )
-                elif user_lost:
-                    cap = f" Your {_piece_list(user_lost)} was lost."
-                elif opp_lost:
-                    cap = f" You captured {opponent}'s {_piece_list(opp_lost)}."
-                else:
-                    cap = " No piece was immediately lost — a positional error."
+    # For checkpoints: track which FEN we last snapshotted at
+    prev_checkpoint_fen = _STARTING_FEN
+    prev_checkpoint_fm  = 0
+
+    # ── Process events ────────────────────────────────────────────────────────
+    for sort_key, kind, data in all_events:
+
+        if kind == "checkpoint":
+            fm = data
+            if fm > full_moves:
+                fm = full_moves
+            # Find the closest fen at or before ply fm*2
+            target_ply = fm * 2
+            available_fens = [p for p in sorted(fen_map.keys()) if p <= target_ply]
+            if not available_fens:
+                continue
+            curr_fen = fen_map[available_fens[-1]]
+
+            # Cumulative pieces lost since last checkpoint
+            wl, bl = _pieces_lost(prev_checkpoint_fen, curr_fen)
+            user_lost_cp = wl if is_white else bl
+            opp_lost_cp  = bl if is_white else wl
+
+            # Current material advantage
+            closest_ply = available_fens[-1]
+            user_mat = (material_map[closest_ply] if is_white else -material_map[closest_ply]) \
+                       if closest_ply in material_map else 0
+
+            # Format losses
+            user_lost_str = _piece_summary(user_lost_cp)
+            opp_lost_str  = _piece_summary(opp_lost_cp)
+
+            since_label = (
+                f"moves {prev_checkpoint_fm + 1}–{fm}"
+                if prev_checkpoint_fm > 0
+                else f"moves 1–{fm}"
+            )
+
+            if user_mat > 0:
+                adv_str = f"Material advantage: {username} +{user_mat} ({_material_desc(user_mat)})."
+            elif user_mat < 0:
+                adv_str = f"Material advantage: {opponent} +{abs(user_mat)} ({_material_desc(-user_mat)})."
             else:
-                actor = f"{opponent}'s {err_label.lower()}"
-                if opp_lost and user_lost:
-                    cap = (
-                        f" {opponent} traded their {_piece_list(opp_lost)} "
-                        f"for your {_piece_list(user_lost)}."
-                    )
-                elif opp_lost:
-                    cap = f" {opponent}'s {_piece_list(opp_lost)} was lost."
-                elif user_lost:
-                    cap = f" Your {_piece_list(user_lost)} was captured."
+                adv_str = "Material is equal."
+
+            # Eval at this checkpoint
+            eval_str = ""
+            if closest_ply in eval_map:
+                raw_eval = eval_map[closest_ply]
+                ue = raw_eval if is_white else -raw_eval
+                if ue >= 1.5:
+                    eval_str = f" Eval: {username} +{ue:.1f}."
+                elif ue >= 0.3:
+                    eval_str = f" Eval: slight edge for {username} (+{ue:.1f})."
+                elif ue >= -0.3:
+                    eval_str = f" Eval: balanced ({ue:+.2f})."
+                elif ue >= -1.5:
+                    eval_str = f" Eval: slight edge for {opponent} ({ue:.1f})."
                 else:
-                    cap = " No piece was immediately lost — a positional error."
+                    eval_str = f" Eval: {opponent} +{abs(ue):.1f}."
 
             parts.append(
-                f"  Move {full_mn} ({phase}) — {actor}: {eval_str}.{cap}{mat_str}"
+                f"  ── After move {fm} ({since_label}) ──"
+                f" {username} lost: {user_lost_str}."
+                f" {opponent} lost: {opp_lost_str}."
+                f" {adv_str}{eval_str}"
             )
+
+            prev_checkpoint_fen = curr_fen
+            prev_checkpoint_fm  = fm
+            continue
+
+        # kind == "move"
+        ply     = data
+        full_mn = (ply + 1) // 2
+        phase   = _phase(ply)
+
+        # Current material string — name the player so it's unambiguous
+        mat_str = ""
+        if ply in material_map:
+            user_mat = material_map[ply] if is_white else -material_map[ply]
+            pts = abs(user_mat)
+            pts_str = f"{pts}pt{'s' if pts != 1 else ''}"
+            if user_mat > 0:
+                mat_str = f" {username} up {pts_str}."
+            elif user_mat < 0:
+                mat_str = f" {opponent} up {pts_str}."
+            else:
+                mat_str = " Material equal."
+
+        if ply in error_by_ply:
+            for is_user_event, d in sorted(error_by_ply[ply], key=lambda x: not x[0]):
+                drop_cp   = int(round(d["drop"] * 100))
+                err_label = (
+                    "Blunder"    if d["drop"] >= BLUNDER_THRESH
+                    else "Mistake"    if d["drop"] >= MISTAKE_THRESH
+                    else "Inaccuracy"
+                )
+                before_u = d["before"] if is_white else -d["before"]
+                after_u  = d["after"]  if is_white else -d["after"]
+                eval_str = f"eval {_sign(before_u)} → {_sign(after_u)} ({drop_cp}cp)"
+
+                # Best move: what should have been played (from the position before this ply)
+                best_uci = best_move_map.get(ply - 1)
+                prev_fen_for_best = fen_map.get(ply - 1)
+                if best_uci and prev_fen_for_best:
+                    best_str = f" Best: {_uci_to_san(best_uci, prev_fen_for_best)}."
+                else:
+                    best_str = ""
+
+                user_lost: list = []
+                opp_lost:  list = []
+                for check_ply in (ply, ply + 1):
+                    fa = fen_map.get(check_ply - 1)
+                    fb = fen_map.get(check_ply)
+                    if fa and fb:
+                        wl, bl = _pieces_lost(fa, fb)
+                        user_lost.extend(wl if is_white else bl)
+                        opp_lost.extend(bl if is_white else wl)
+
+                if is_user_event:
+                    actor = f"Your {err_label.lower()}"
+                    if user_lost and opp_lost:
+                        cap = (f" You traded your {_piece_list(user_lost)}"
+                               f" for {opponent}'s {_piece_list(opp_lost)}.")
+                    elif user_lost:
+                        cap = f" Your {_piece_list(user_lost)} was lost."
+                    elif opp_lost:
+                        cap = f" You captured {opponent}'s {_piece_list(opp_lost)}."
+                    else:
+                        cap = " No piece immediately lost — positional error."
+                else:
+                    actor = f"{opponent}'s {err_label.lower()}"
+                    if opp_lost and user_lost:
+                        cap = (f" {opponent} traded their {_piece_list(opp_lost)}"
+                               f" for your {_piece_list(user_lost)}.")
+                    elif opp_lost:
+                        cap = f" {opponent}'s {_piece_list(opp_lost)} was lost."
+                    elif user_lost:
+                        cap = f" Your {_piece_list(user_lost)} was captured."
+                    else:
+                        cap = " No piece immediately lost — positional error."
+
+                parts.append(
+                    f"  Move {full_mn} ({phase}) — {actor}: {eval_str}.{cap}{best_str}{mat_str}"
+                )
+
+        elif ply in mat_change_plies:
+            fa = fen_map.get(ply - 1)
+            fb = fen_map.get(ply)
+            if not (fa and fb):
+                continue
+
+            wl, bl     = _pieces_lost(fa, fb)
+            user_lost  = wl if is_white else bl
+            opp_lost   = bl if is_white else wl
+            user_moved = ((ply % 2 == 1) == is_white)
+
+            if user_lost and opp_lost:
+                if user_moved:
+                    desc = (f"You traded your {_piece_list(user_lost)}"
+                            f" for {opponent}'s {_piece_list(opp_lost)}.")
+                else:
+                    desc = (f"{opponent} traded their {_piece_list(opp_lost)}"
+                            f" for your {_piece_list(user_lost)}.")
+            elif opp_lost:
+                desc = (f"You captured {opponent}'s {_piece_list(opp_lost)}."
+                        if user_moved
+                        else f"{opponent}'s {_piece_list(opp_lost)} was taken.")
+            elif user_lost:
+                desc = (f"Your {_piece_list(user_lost)} was taken."
+                        if user_moved
+                        else f"{opponent} captured your {_piece_list(user_lost)}.")
+            else:
+                continue
+
+            parts.append(f"  Move {full_mn} ({phase}) — {desc}{mat_str}")
 
     # Closing line
     term = _termination_method(game, evals)
@@ -514,250 +688,33 @@ def _build_text(
     material_map: dict,
     evals: list,
 ) -> str:
-    parts = []
-
     result = game.get("result", "?")
     if is_white:
         outcome = "Win" if result == "1-0" else ("Loss" if result == "0-1" else "Draw")
     else:
         outcome = "Win" if result == "0-1" else ("Loss" if result == "1-0" else "Draw")
 
-    opponent = game.get("black" if is_white else "white") or "?"
     full_moves = (total_moves + 1) // 2
 
-    headline = _result_headline(game, is_white, outcome, evals)
-    parts.append(f"{headline} · {full_moves} moves")
+    white_player = game.get("white") or "?"
+    black_player = game.get("black") or "?"
+    white_elo    = game.get("white_elo")
+    black_elo    = game.get("black_elo")
+    white_str    = f"{white_player}{f' ({white_elo})' if white_elo else ''}"
+    black_str    = f"{black_player}{f' ({black_elo})' if black_elo else ''}"
 
-    # ── Game Story ────────────────────────────────────────────────────────────
+    headline = _result_headline(game, is_white, outcome, evals)
+
+    parts = [
+        f"{headline} · {full_moves} moves",
+        f"White: {white_str}  |  Black: {black_str}",
+    ]
+
     parts.extend(_game_story(
         game, is_white, total_moves,
-        blunders, mistakes, opp_blunders, opp_mistakes,
+        blunders, mistakes, inaccuracies,
+        opp_blunders, opp_mistakes, opp_inaccuracies,
         eval_map, material_map, evals,
     ))
-
-    # ── Your errors ───────────────────────────────────────────────────────────
-    parts.append("")
-    parts.append("YOUR PLAY")
-    if not blunders and not mistakes and not inaccuracies:
-        parts.append("  Clean game — no significant errors detected.")
-    else:
-        err_parts = []
-        if blunders:
-            err_parts.append(f"{len(blunders)} blunder{'s' if len(blunders) != 1 else ''}")
-        if mistakes:
-            err_parts.append(f"{len(mistakes)} mistake{'s' if len(mistakes) != 1 else ''}")
-        if inaccuracies:
-            err_parts.append(
-                f"{len(inaccuracies)} inaccurac{'ies' if len(inaccuracies) != 1 else 'y'}"
-            )
-        parts.append("  Errors: " + ", ".join(err_parts) + ".")
-
-        # Biggest own error
-        if biggest:
-            before_user = biggest["before"] if is_white else -biggest["before"]
-            after_user  = biggest["after"]  if is_white else -biggest["after"]
-            drop_cp     = int(round(biggest["drop"] * 100))
-            err_type    = (
-                "Blunder" if biggest["drop"] >= BLUNDER_THRESH
-                else "Mistake" if biggest["drop"] >= MISTAKE_THRESH
-                else "Inaccuracy"
-            )
-            full_move_num = (biggest["move"] + 1) // 2
-            parts.append(
-                f"  Worst: {err_type} on move {full_move_num} ({biggest['phase']}) — "
-                f"eval {_sign(before_user)} → {_sign(after_user)} ({drop_cp}cp lost)."
-            )
-
-        # Blunder phase breakdown
-        by_phase: dict[str, int] = {"opening": 0, "middlegame": 0, "endgame": 0}
-        for d in blunders:
-            by_phase[d["phase"]] += 1
-        phase_parts = [f"{v} in {k}" for k, v in by_phase.items() if v > 0]
-        if phase_parts:
-            parts.append("  Blunders by phase: " + ", ".join(phase_parts) + ".")
-
-    # Opening assessment (eval after move ~20)
-    opening_eval_mn = None
-    for mn in range(20, 0, -1):
-        if mn in eval_map:
-            opening_eval_mn = mn
-            break
-    if opening_eval_mn:
-        oe_raw = eval_map[opening_eval_mn]
-        oe = oe_raw if is_white else -oe_raw
-        if oe >= 1.5:
-            desc = f"strong advantage ({_sign(oe)} pawns)"
-        elif oe >= 0.3:
-            desc = f"slight edge ({_sign(oe)} pawns)"
-        elif oe >= -0.3:
-            desc = f"balanced ({_sign(oe)} pawns)"
-        elif oe >= -1.5:
-            desc = f"slightly worse ({_sign(oe)} pawns)"
-        else:
-            desc = f"significantly worse ({_sign(oe)} pawns)"
-        full_move_num = (opening_eval_mn + 1) // 2
-        parts.append(f"  After opening (move {full_move_num}): {desc}.")
-
-    # Peak advantage note
-    if eval_map:
-        peak = max(eval_map.values()) if is_white else max(-v for v in eval_map.values())
-        if peak > 3.0 and outcome == "Loss":
-            parts.append(
-                f"  Note: Peak advantage was +{peak:.2f} pawns — a winning position was lost."
-            )
-        elif peak > 2.0 and outcome == "Draw":
-            parts.append(
-                f"  Note: Peak advantage was +{peak:.2f} pawns — a potential win ended in a draw."
-            )
-
-    # ── Material balance ──────────────────────────────────────────────────────
-    if material_map:
-        sorted_mns = sorted(material_map.keys())
-        user_balances = [(mn, (material_map[mn] if is_white else -material_map[mn]))
-                         for mn in sorted_mns]
-
-        # Final material balance (from user's perspective)
-        last_mn = sorted_mns[-1]
-        final_balance = material_map[last_mn]
-        user_final = final_balance if is_white else -final_balance
-
-        # Peak / worst
-        peak_mn, peak_adv  = max(user_balances, key=lambda x: x[1])
-        worst_mn, worst_adv = min(user_balances, key=lambda x: x[1])
-
-        # Duration stats
-        stats = _material_duration_stats(user_balances)
-
-        parts.append("")
-        parts.append("MATERIAL")
-        parts.append(f"  End of game: {_material_desc(user_final)}.")
-
-        if peak_adv > 0 and peak_adv != user_final:
-            full_mn = (peak_mn + 1) // 2
-            parts.append(f"  Peak advantage: {_material_desc(peak_adv)} (move {full_mn}).")
-        if worst_adv < 0 and worst_adv != user_final:
-            full_mn = (worst_mn + 1) // 2
-            parts.append(f"  Worst deficit: {_material_desc(worst_adv)} (move {full_mn}).")
-
-        # Duration & average
-        if stats:
-            avg = stats["avg_balance"]
-            ahead_pct  = stats["ahead_pct"]
-            behind_pct = stats["behind_pct"]
-            streak     = stats["max_streak"]
-
-            avg_desc = (
-                f"averaged {_sign(float(avg))} pts"
-                if avg != 0
-                else "averaged equal material"
-            )
-            parts.append(
-                f"  Over the game you {avg_desc} — "
-                f"ahead {ahead_pct}% of moves, behind {behind_pct}%."
-            )
-            if streak >= 10:
-                streak_moves = streak // 2
-                parts.append(
-                    f"  Longest sustained material lead: ~{streak_moves} full moves ({streak} half-moves)."
-                )
-
-        # Annotate each blunder/mistake with immediate + sustained material impact
-        for d in blunders + mistakes:
-            mn = d["move"]
-            prev_mn = mn - 1
-            full_mn = (mn + 1) // 2
-            err_type = "Blunder" if d["drop"] >= BLUNDER_THRESH else "Mistake"
-
-            immediate_loss = None
-            if prev_mn in material_map and mn in material_map:
-                before_mat = material_map[prev_mn] if is_white else -material_map[prev_mn]
-                after_mat  = material_map[mn]       if is_white else -material_map[mn]
-                mat_lost = before_mat - after_mat
-                if mat_lost >= 1:
-                    immediate_loss = mat_lost
-
-            sustained = _material_after_blunder(mn, material_map, is_white, sorted_mns, window=15)
-
-            note_parts = []
-            if immediate_loss is not None:
-                note_parts.append(
-                    f"lost {_material_desc(-immediate_loss).replace('down ', '')} of material immediately"
-                )
-            if sustained is not None:
-                w          = sustained["window"]
-                opp_count  = sustained["opp_count"]
-                user_count = sustained["user_count"]
-
-                def _edge_range(lo, hi):
-                    fmt = lambda v: f"{v:.0f}" if v == int(v) else f"{v:.1f}"
-                    return f"+{fmt(lo)}pt" if lo == hi else f"+{fmt(lo)}–{fmt(hi)}pt"
-
-                if opp_count >= 8:
-                    note_parts.append(
-                        f"opponent held material edge for {opp_count} of next {w} half-moves "
-                        f"({_edge_range(sustained['opp_min_edge'], sustained['opp_max_edge'])})"
-                    )
-                elif opp_count >= 4:
-                    note_parts.append(
-                        f"opponent gained temporary material edge ({opp_count}/{w} half-moves, "
-                        f"{_edge_range(sustained['opp_min_edge'], sustained['opp_max_edge'])})"
-                    )
-                if user_count >= 8:
-                    note_parts.append(
-                        f"you held material edge for {user_count} of next {w} half-moves "
-                        f"({_edge_range(sustained['user_min_edge'], sustained['user_max_edge'])})"
-                    )
-                elif user_count >= 4:
-                    note_parts.append(
-                        f"you maintained temporary material edge ({user_count}/{w} half-moves, "
-                        f"{_edge_range(sustained['user_min_edge'], sustained['user_max_edge'])})"
-                    )
-
-            if note_parts:
-                parts.append(
-                    f"  Move {full_mn} ({err_type.lower()}): {'; '.join(note_parts)}."
-                )
-
-    # ── Opponent errors ───────────────────────────────────────────────────────
-    parts.append("")
-    parts.append(f"OPPONENT ({opponent})")
-    if not opp_blunders and not opp_mistakes and not opp_inaccuracies:
-        parts.append("  Clean game — no significant errors detected.")
-    else:
-        opp_err_parts = []
-        if opp_blunders:
-            opp_err_parts.append(f"{len(opp_blunders)} blunder{'s' if len(opp_blunders) != 1 else ''}")
-        if opp_mistakes:
-            opp_err_parts.append(f"{len(opp_mistakes)} mistake{'s' if len(opp_mistakes) != 1 else ''}")
-        if opp_inaccuracies:
-            opp_err_parts.append(
-                f"{len(opp_inaccuracies)} inaccurac{'ies' if len(opp_inaccuracies) != 1 else 'y'}"
-            )
-        parts.append("  Errors: " + ", ".join(opp_err_parts) + ".")
-
-        # Biggest opponent error
-        opp_biggest = max(opp_drops, key=lambda d: d["drop"]) if opp_drops else None
-        if opp_biggest:
-            before_opp = opp_biggest["before"] if not is_white else -opp_biggest["before"]
-            after_opp  = opp_biggest["after"]  if not is_white else -opp_biggest["after"]
-            drop_cp    = int(round(opp_biggest["drop"] * 100))
-            err_type   = (
-                "Blunder" if opp_biggest["drop"] >= BLUNDER_THRESH
-                else "Mistake" if opp_biggest["drop"] >= MISTAKE_THRESH
-                else "Inaccuracy"
-            )
-            full_move_num = (opp_biggest["move"] + 1) // 2
-            parts.append(
-                f"  Worst: {err_type} on move {full_move_num} ({opp_biggest['phase']}) — "
-                f"eval {_sign(before_opp)} → {_sign(after_opp)} ({drop_cp}cp lost)."
-            )
-
-        # Opponent blunder phase breakdown
-        opp_by_phase: dict[str, int] = {"opening": 0, "middlegame": 0, "endgame": 0}
-        for d in opp_blunders:
-            opp_by_phase[d["phase"]] += 1
-        opp_phase_parts = [f"{v} in {k}" for k, v in opp_by_phase.items() if v > 0]
-        if opp_phase_parts:
-            parts.append("  Blunders by phase: " + ", ".join(opp_phase_parts) + ".")
 
     return "\n".join(parts)

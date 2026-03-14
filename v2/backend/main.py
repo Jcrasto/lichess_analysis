@@ -42,6 +42,7 @@ from storage import (
     query_review_by_game_id,
     upsert_review,
     get_reviews_path,
+    mark_review_status,
 )
 from etl import parse_pgn_to_games, run_incremental_etl, run_full_etl
 
@@ -340,6 +341,7 @@ def get_reviews(
     min_moves: Optional[int] = None,
     max_moves: Optional[int] = None,
     bookmarked_only: bool = False,
+    only_unreviewed: bool = True,
 ):
     return query_reviews(
         username, page=page, page_size=page_size,
@@ -347,7 +349,7 @@ def get_reviews(
         color=color, outcome=outcome, perf_type=perf_type,
         since_date=since_date, until_date=until_date, opening=opening,
         termination=termination, min_moves=min_moves, max_moves=max_moves,
-        bookmarked_only=bookmarked_only,
+        bookmarked_only=bookmarked_only, only_unreviewed=only_unreviewed,
     )
 
 
@@ -425,6 +427,18 @@ async def stream_review_logs(username: str, request: Request):
 def get_review_for_game(username: str, game_id: str):
     review = query_review_by_game_id(username, game_id)
     return review or {}
+
+
+class MarkReviewRequest(BaseModel):
+    is_reviewed: bool
+
+
+@app.post("/api/reviews/game/{username}/{game_id}/mark")
+def mark_review(username: str, game_id: str, req: MarkReviewRequest):
+    found = mark_review_status(username, game_id, req.is_reviewed)
+    if not found:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return {"game_id": game_id, "is_reviewed": req.is_reviewed}
 
 
 # ── Refresh ───────────────────────────────────────────

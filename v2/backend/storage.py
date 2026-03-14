@@ -793,17 +793,36 @@ def get_reviews_path(username: str) -> Path:
 
 
 def upsert_review(username: str, review: dict):
-    """Insert or replace one review row in the reviews parquet."""
+    """Insert or replace one review row in the reviews parquet.
+    Preserves is_reviewed from the existing row if present."""
     path = get_reviews_path(username)
     path.parent.mkdir(parents=True, exist_ok=True)
-    df_new = pd.DataFrame([review])
     if path.exists():
         df_existing = pd.read_parquet(path)
-        df_existing = df_existing[df_existing["game_id"] != review["game_id"]]
-        df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+        # Carry forward is_reviewed so regeneration doesn't reset it
+        existing_row = df_existing[df_existing["game_id"] == review["game_id"]]
+        if not existing_row.empty and "is_reviewed" in existing_row.columns:
+            existing_val = existing_row.iloc[0]["is_reviewed"]
+            review.setdefault("is_reviewed", False if pd.isna(existing_val) else bool(existing_val))
+        else:
+            review.setdefault("is_reviewed", False)
+        df_new = pd.DataFrame([review])
+        df_combined = pd.concat(
+            [df_existing[df_existing["game_id"] != review["game_id"]], df_new],
+            ignore_index=True,
+        )
     else:
-        df_combined = df_new
+        review.setdefault("is_reviewed", False)
+        df_combined = pd.DataFrame([review])
     df_combined.to_parquet(path, index=False)
+
+
+def _ensure_is_reviewed_column(reviews_path: Path):
+    """Add is_reviewed column (default False) to reviews parquet if missing."""
+    df = pd.read_parquet(reviews_path)
+    if "is_reviewed" not in df.columns:
+        df["is_reviewed"] = False
+        df.to_parquet(reviews_path, index=False)
 
 
 def query_reviews(
@@ -822,12 +841,15 @@ def query_reviews(
     min_moves: Optional[int] = None,
     max_moves: Optional[int] = None,
     bookmarked_only: bool = False,
+    only_unreviewed: bool = False,
 ) -> dict:
     reviews_path = get_reviews_path(username)
     if not reviews_path.exists():
         return {"no_reviews": True}
     if not games_parquet_exists(username):
         return {"no_data": True}
+
+    _ensure_is_reviewed_column(reviews_path)
 
     reviews_glob = str(reviews_path)
     games_glob = str(get_games_dir(username) / "*.parquet")
@@ -840,10 +862,11 @@ def query_reviews(
     )
     games_conditions = " AND ".join(conditions) if conditions else "TRUE"
 
+    reviews_filter = "AND COALESCE(r.is_reviewed, FALSE) = FALSE" if only_unreviewed else ""
+
     VALID_SORTS = {"blunder_count", "mistake_count", "inaccuracy_count", "biggest_drop_cp", "date"}
     sort_col = sort_by if sort_by in VALID_SORTS else "blunder_count"
     sort_dir_sql = "ASC" if sort_dir.lower() == "asc" else "DESC"
-    # Always qualify date to avoid ambiguity with r.date in the reviews table
     sort_col_sql = "g.date" if sort_col == "date" else sort_col
     secondary_order = "" if sort_col == "date" else ", g.date DESC"
 
@@ -852,7 +875,7 @@ def query_reviews(
     sql = f"""
         SELECT r.game_id, r.blunder_count, r.mistake_count, r.inaccuracy_count,
                r.biggest_drop_cp, r.critical_move_number, r.critical_phase,
-               r.reviewed_at,
+               r.reviewed_at, r.is_reviewed,
                g.white, g.black, g.white_elo, g.black_elo,
                g.result, g.opening, g.perf_type, g.date, g.termination
         FROM read_parquet('{reviews_glob}') r
@@ -860,6 +883,7 @@ def query_reviews(
             SELECT * FROM read_parquet('{games_glob}')
             WHERE {games_conditions}
         ) g ON r.game_id = g.game_id
+        WHERE TRUE {reviews_filter}
         ORDER BY {sort_col_sql} {sort_dir_sql}{secondary_order}
     """
 
@@ -871,6 +895,20 @@ def query_reviews(
 
     reviews = [_serialize_row(dict(zip(cols, row))) for row in rows]
     return {"total": total, "page": page, "page_size": page_size, "reviews": reviews}
+
+
+def mark_review_status(username: str, game_id: str, is_reviewed: bool) -> bool:
+    """Set is_reviewed flag for a specific review. Returns True if the row was found."""
+    path = get_reviews_path(username)
+    if not path.exists():
+        return False
+    _ensure_is_reviewed_column(path)
+    df = pd.read_parquet(path)
+    if game_id not in df["game_id"].values:
+        return False
+    df.loc[df["game_id"] == game_id, "is_reviewed"] = is_reviewed
+    df.to_parquet(path, index=False)
+    return True
 
 
 def get_unreviewed_games(

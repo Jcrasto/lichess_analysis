@@ -42,6 +42,7 @@ export default function App() {
   const [selectedGame, setSelectedGame] = useState(null)
   const [selectedGameEvals, setSelectedGameEvals] = useState(null)
   const [selectedGameReview, setSelectedGameReview] = useState(null)
+  const [reviewsRefreshKey, setReviewsRefreshKey] = useState(0)
 
   // Pending filters = what's shown in the sidebar UI (draft state)
   const [pendingFilters, setPendingFilters] = useState({ ...EMPTY_FILTERS })
@@ -275,6 +276,18 @@ export default function App() {
   // Called by Dashboard when a chart element is clicked
   const handlePendingChange = (updates) => {
     setPendingFilters(prev => ({ ...prev, ...updates }))
+  }
+
+  const handleMarkReviewed = async (gameId, isReviewed) => {
+    try {
+      await fetch(`/api/reviews/game/${defaultUser}/${gameId}/mark`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_reviewed: isReviewed }),
+      })
+      setSelectedGameReview(prev => prev ? { ...prev, is_reviewed: isReviewed } : prev)
+      setReviewsRefreshKey(k => k + 1)
+    } catch {}
   }
 
   const handleSelectGame = async (game) => {
@@ -579,7 +592,7 @@ export default function App() {
           </div>
         ) : activeTab === 'review' ? (
           <div className="dashboard-scroll">
-            <ReviewQueue username={defaultUser} appliedFilters={appliedFilters} onSelectGame={handleSelectGame} />
+            <ReviewQueue username={defaultUser} appliedFilters={appliedFilters} onSelectGame={handleSelectGame} refreshKey={reviewsRefreshKey} />
           </div>
         ) : activeTab === 'dashboard' ? (
           <div className="dashboard-scroll">
@@ -671,6 +684,7 @@ export default function App() {
           username={defaultUser}
           evals={selectedGameEvals}
           review={selectedGameReview}
+          onMarkReviewed={handleMarkReviewed}
           onClose={() => {
             setSelectedGame(null)
             setSelectedGameEvals(null)

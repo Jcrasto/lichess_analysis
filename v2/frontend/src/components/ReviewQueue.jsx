@@ -19,15 +19,16 @@ function PhaseBar({ label, blunders, pct }) {
 // ── Sortable reviews grid ─────────────────────────────────────────────────────
 
 const COLUMNS = [
-  { key: 'date',            label: 'Date',       sortable: true  },
-  { key: 'opponent',        label: 'Opponent',   sortable: false },
-  { key: 'result',          label: 'Result',     sortable: false },
-  { key: 'opening',         label: 'Opening',    sortable: false },
-  { key: 'blunder_count',   label: 'Blunders',   sortable: true  },
-  { key: 'mistake_count',   label: 'Mistakes',   sortable: true  },
-  { key: 'inaccuracy_count',label: 'Inaccuracies',sortable: true },
-  { key: 'biggest_drop_cp', label: 'Biggest Drop',sortable: true },
-  { key: 'critical_phase',  label: 'Phase',      sortable: false },
+  { key: 'date',            label: 'Date',        sortable: true  },
+  { key: 'opponent',        label: 'Opponent',    sortable: false },
+  { key: 'result',          label: 'Result',      sortable: false },
+  { key: 'opening',         label: 'Opening',     sortable: false },
+  { key: 'blunder_count',   label: 'Blunders',    sortable: true  },
+  { key: 'mistake_count',   label: 'Mistakes',    sortable: true  },
+  { key: 'inaccuracy_count',label: 'Inaccuracies',sortable: true  },
+  { key: 'biggest_drop_cp', label: 'Biggest Drop',sortable: true  },
+  { key: 'critical_phase',  label: 'Phase',       sortable: false },
+  { key: 'is_reviewed',     label: 'Reviewed',    sortable: false },
 ]
 
 function SortIcon({ active, dir }) {
@@ -52,7 +53,7 @@ function ReviewRow({ review, username, onSelect }) {
 
   return (
     <tr className="review-grid-row" onClick={() => onSelect(review)}>
-      <td className="col-date">{review.date ? review.date.slice(0, 7) : '—'}</td>
+      <td className="col-date">{review.date ? review.date.slice(0, 10) : '—'}</td>
       <td className="col-opponent">
         <span className="opponent-name">{opponent}</span>
         {oppElo && <span className="opponent-elo"> ({oppElo})</span>}
@@ -88,23 +89,25 @@ function ReviewRow({ review, username, onSelect }) {
           : <span className="col-zero">—</span>}
       </td>
       <td className="col-phase">{review.critical_phase || '—'}</td>
+      <td className="col-reviewed">{review.is_reviewed ? '✓' : ''}</td>
     </tr>
   )
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ReviewQueue({ username, appliedFilters = {}, onSelectGame }) {
+export default function ReviewQueue({ username, appliedFilters = {}, onSelectGame, refreshKey }) {
   const [patterns, setPatterns]             = useState(null)
   const [patternsLoading, setPatternsLoading] = useState(true)
   const [reviews, setReviews]               = useState(null)
   const [reviewsLoading, setReviewsLoading] = useState(true)
   const [page, setPage]                     = useState(1)
-  const [sortBy, setSortBy]                 = useState('blunder_count')
+  const [sortBy, setSortBy]                 = useState('date')
   const [sortDir, setSortDir]               = useState('desc')
   const [unreviewedCount, setUnreviewedCount] = useState(0)
   const [reviewRunning, setReviewRunning]   = useState(false)
   const [showReviewLog, setShowReviewLog]   = useState(false)
+  const [onlyUnreviewed, setOnlyUnreviewed] = useState(true)
 
   const appliedFiltersRef = useRef(appliedFilters)
   const PAGE_SIZE = 50
@@ -140,17 +143,17 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
     finally { setPatternsLoading(false) }
   }, [username, buildParams])
 
-  const fetchReviews = useCallback(async (p = 1, sb = sortBy, sd = sortDir) => {
+  const fetchReviews = useCallback(async (p = 1, sb = sortBy, sd = sortDir, ou = onlyUnreviewed) => {
     if (!username) return
     setReviewsLoading(true)
     try {
-      const params = buildParams({ page: p, page_size: PAGE_SIZE, sort_by: sb, sort_dir: sd })
+      const params = buildParams({ page: p, page_size: PAGE_SIZE, sort_by: sb, sort_dir: sd, only_unreviewed: ou })
       const r = await fetch(`/api/reviews/${username}?${params}`)
       setReviews(await r.json())
       setPage(p)
     } catch { setReviews(null) }
     finally { setReviewsLoading(false) }
-  }, [username, sortBy, sortDir, buildParams])
+  }, [username, sortBy, sortDir, onlyUnreviewed, buildParams])
 
   const fetchUnreviewed = useCallback(async () => {
     if (!username) return
@@ -175,10 +178,10 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
 
   useEffect(() => {
     fetchPatterns()
-    fetchReviews(1, sortBy, sortDir)
+    fetchReviews(1, sortBy, sortDir, onlyUnreviewed)
     fetchUnreviewed()
     fetchReviewStatus()
-  }, [username, appliedFilters]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [username, appliedFilters, onlyUnreviewed, refreshKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll review status when running
   useEffect(() => {
@@ -207,7 +210,13 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
     }
     setSortBy(key)
     setSortDir(newDir)
-    fetchReviews(1, key, newDir)
+    fetchReviews(1, key, newDir, onlyUnreviewed)
+  }
+
+  const handleOnlyUnreviewedChange = (e) => {
+    const val = e.target.checked
+    setOnlyUnreviewed(val)
+    fetchReviews(1, sortBy, sortDir, val)
   }
 
   // ── generate reviews ──────────────────────────────────────────────────────
@@ -271,7 +280,7 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
       {/* ── Mistake Patterns ── */}
       <section className="patterns-section">
         <h3 className="section-title">Mistake Patterns</h3>
-        {patternsLoading ? (
+        {patternsLoading && !patterns ? (
           <div className="review-loading">Loading patterns···</div>
         ) : noEvals ? (
           <div className="review-empty-inline">
@@ -282,7 +291,7 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
             </div>
           </div>
         ) : patterns && !patterns.no_evals ? (
-          <div className="patterns-grid">
+          <div className={`patterns-grid${patternsLoading ? ' reviews-refreshing' : ''}`}>
             {/* Summary */}
             <div className="pattern-card summary-card">
               <div className="pattern-card-title">Summary</div>
@@ -345,6 +354,14 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
             )}
           </h3>
           <div className="queue-controls">
+            <label className="only-unreviewed-label">
+              <input
+                type="checkbox"
+                checked={onlyUnreviewed}
+                onChange={handleOnlyUnreviewedChange}
+              />
+              Only unreviewed
+            </label>
             {reviewRunning ? (
               <button className="btn-generate btn-generate-running" onClick={() => setShowReviewLog(true)}>
                 ⟳ GENERATING…
@@ -371,7 +388,7 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
           </div>
         </div>
 
-        {reviewsLoading ? (
+        {reviewsLoading && !reviews ? (
           <div className="review-loading">Loading reviews···</div>
         ) : !reviews || reviews.no_reviews ? (
           <div className="no-data-msg">
@@ -380,7 +397,7 @@ export default function ReviewQueue({ username, appliedFilters = {}, onSelectGam
         ) : reviewList.length === 0 ? (
           <div className="no-data-msg">No reviews match the current filters.</div>
         ) : (
-          <div className="reviews-table-wrap">
+          <div className={`reviews-table-wrap${reviewsLoading ? ' reviews-refreshing' : ''}`}>
             <table className="reviews-table">
               <thead>
                 <tr>

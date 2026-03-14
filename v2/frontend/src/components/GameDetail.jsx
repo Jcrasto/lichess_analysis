@@ -105,8 +105,9 @@ function evalColor(ev) {
   return 'eval-neutral'
 }
 
-export default function GameDetail({ game, username, evals, review, onClose }) {
+export default function GameDetail({ game, username, evals, review, onClose, onMarkReviewed }) {
   const [expanded, setExpanded] = useState(false)
+  const [markingReviewed, setMarkingReviewed] = useState(false)
   const movesWithEvals = injectEvals(game.moves, evals)
   const moves = formatMoves(movesWithEvals)
   const isWhite = game.white?.toLowerCase() === username?.toLowerCase()
@@ -192,7 +193,22 @@ export default function GameDetail({ game, username, evals, review, onClose }) {
 
           {review && review.text_summary && (
             <div className="review-full-section">
-              <div className="pgn-title">REVIEW</div>
+              <div className="review-section-header">
+                <div className="pgn-title">REVIEW</div>
+                {onMarkReviewed && (
+                  <button
+                    className={`btn-mark-reviewed ${review.is_reviewed ? 'btn-mark-unreviewed' : ''}`}
+                    disabled={markingReviewed}
+                    onClick={async () => {
+                      setMarkingReviewed(true)
+                      await onMarkReviewed(game.game_id, !review.is_reviewed)
+                      setMarkingReviewed(false)
+                    }}
+                  >
+                    {review.is_reviewed ? 'Mark as Unreviewed' : 'Mark as Reviewed'}
+                  </button>
+                )}
+              </div>
               <div className="review-badges">
                 {review.blunder_count > 0 && (
                   <span className="badge badge-blunder">🔴 ×{review.blunder_count}</span>
