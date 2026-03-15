@@ -13,7 +13,6 @@ const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fenToBoard(fen) {
-  // Returns grid[rank8..rank1][fileA..fileH], null = empty square
   return fen.split(' ')[0].split('/').map(row => {
     const arr = []
     for (const ch of row) {
@@ -31,7 +30,6 @@ function winPct(cpPawns) {
 
 function parsePlies(movesStr, evalsArr) {
   if (!movesStr) return []
-  // Build eval map from evals
   const evalMap = {}
   for (const e of evalsArr || []) {
     let s
@@ -55,6 +53,7 @@ function parsePlies(movesStr, evalsArr) {
       side: ply % 2 === 1 ? 'w' : 'b',
       san: t,
       eval: evalMap[ply] || null,
+      isBestLine: false,
     })
   }
   return plies
@@ -65,10 +64,10 @@ function parsePlies(movesStr, evalsArr) {
 function parseStorySections(text) {
   if (!text) return { sections: [], dividers: [] }
   const lines = text.split('\n')
-  const sections = []   // { lines[], startMove, endMove }
-  const dividers = []   // { line, afterMove }
+  const sections = []
+  const dividers = []
   let pending = []
-  let sectionStart = 0  // first move covered by pending section
+  let sectionStart = 0
 
   for (const line of lines) {
     const m = line.match(/── After move (\d+)/)
@@ -82,7 +81,6 @@ function parseStorySections(text) {
       pending.push(line)
     }
   }
-  // Trailing section after last checkpoint
   sections.push({ lines: pending, startMove: sectionStart, endMove: Infinity })
   return { sections, dividers }
 }
@@ -113,10 +111,9 @@ function EvalBar({ cpScore, mateIn, flipped }) {
   else if (cpScore != null) label = `${cpScore >= 0 ? '+' : ''}${cpScore.toFixed(2)}`
   else label = '0.00'
 
-  // flipped = white is at top of board
   const topPct  = flipped ? whiteWin : blackWin
   const botPct  = flipped ? blackWin : whiteWin
-  const topDark = !flipped  // top section is dark (black) when not flipped
+  const topDark = !flipped
 
   return (
     <div className="eval-bar">
@@ -182,12 +179,15 @@ function MoveList({ plies, currentPly, onSelect }) {
     activeRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
   }, [currentPly])
 
-  // Group into pairs: {num, wPly, wSan, wEval, bPly, bSan, bEval}
   const rows = useMemo(() => {
     const r = []
     for (let i = 0; i < plies.length; i += 2) {
       const w = plies[i], b = plies[i + 1]
-      r.push({ num: w.num, wPly: w.ply, wSan: w.san, wEval: w.eval, bPly: b?.ply, bSan: b?.san, bEval: b?.eval })
+      r.push({
+        num: w.num,
+        wPly: w.ply, wSan: w.san, wEval: w.eval, wBL: w.isBestLine,
+        bPly: b?.ply, bSan: b?.san, bEval: b?.eval, bBL: b?.isBestLine,
+      })
     }
     return r
   }, [plies])
@@ -202,7 +202,7 @@ function MoveList({ plies, currentPly, onSelect }) {
             <span className="ml-num">{row.num}.</span>
             <span
               ref={wActive ? activeRef : null}
-              className={`ml-cell ${wActive ? 'ml-active' : ''}`}
+              className={`ml-cell ${wActive ? 'ml-active' : ''} ${row.wBL ? 'ml-best-line' : ''}`}
               onClick={() => onSelect(row.wPly)}
             >
               <span className="ml-san">{row.wSan}</span>
@@ -210,7 +210,7 @@ function MoveList({ plies, currentPly, onSelect }) {
             </span>
             <span
               ref={bActive ? activeRef : null}
-              className={`ml-cell ${bActive ? 'ml-active' : ''}`}
+              className={`ml-cell ${bActive ? 'ml-active' : ''} ${row.bBL ? 'ml-best-line' : ''}`}
               onClick={() => row.bPly != null && onSelect(row.bPly)}
             >
               <span className="ml-san">{row.bSan || ''}</span>
@@ -225,10 +225,17 @@ function MoveList({ plies, currentPly, onSelect }) {
 
 // ── Main Modal ────────────────────────────────────────────────────────────────
 
-export default function BoardModal({ game, username, evals, review, onClose }) {
+export default function BoardModal({ game, username, evals, review, onMarkReviewed, onClose }) {
   const isUserWhite = game.white?.toLowerCase() === username?.toLowerCase()
   const [ply, setPly]       = useState(0)
   const [flipped, setFlipped] = useState(!isUserWhite)
+  const [markingReviewed, setMarkingReviewed] = useState(false)
+  const [isReviewed, setIsReviewed] = useState(review?.is_reviewed ?? false)
+
+  // Best line state
+  const [bestLine, setBestLine]             = useState(null)   // [{san, uci, fen}] or null
+  const [bestLineFromPly, setBestLineFromPly] = useState(null) // ply at which game diverges into best line
+  const [bestLineLoading, setBestLineLoading] = useState(false)
 
   const fenMap = useMemo(() => {
     const m = { 0: STARTING_FEN }
@@ -247,10 +254,37 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
   }, [evals])
 
   const plies = useMemo(() => parsePlies(game.moves, evals), [game.moves, evals])
-  const maxPly = plies.length
 
-  const currentFen       = fenMap[ply] || STARTING_FEN
-  const currentEvalEntry = evalMap[ply] || null
+  // Display plies: game moves up to (not including) bestLineFromPly, then best line plies
+  const displayPlies = useMemo(() => {
+    if (!bestLine || bestLineFromPly == null) return plies
+    const gamePart = plies.slice(0, bestLineFromPly - 1)
+    const blPart = bestLine.map((move, i) => ({
+      ply: bestLineFromPly + i,
+      num: Math.ceil((bestLineFromPly + i) / 2),
+      side: (bestLineFromPly + i) % 2 === 1 ? 'w' : 'b',
+      san: move.san,
+      eval: null,
+      isBestLine: true,
+    }))
+    return [...gamePart, ...blPart]
+  }, [plies, bestLine, bestLineFromPly])
+
+  // Display FEN map: extend with best line FENs
+  const displayFenMap = useMemo(() => {
+    if (!bestLine || bestLineFromPly == null) return fenMap
+    const extended = { ...fenMap }
+    bestLine.forEach((move, i) => {
+      extended[bestLineFromPly + i] = move.fen
+    })
+    return extended
+  }, [fenMap, bestLine, bestLineFromPly])
+
+  const maxPly = displayPlies.length
+  const currentFen = displayFenMap[ply] || STARTING_FEN
+  const currentEvalEntry = (bestLine && bestLineFromPly != null && ply >= bestLineFromPly)
+    ? null
+    : (evalMap[ply] || null)
 
   // Story sections
   const { sections: storySections, dividers: storyDividers } = useMemo(
@@ -279,10 +313,42 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
     return () => window.removeEventListener('keydown', handler)
   }, [prev, next, onClose])
 
-  const info = ply > 0 ? plies[ply - 1] : null
+  // Use displayPlies for the move label
+  const info = ply > 0 ? displayPlies[ply - 1] : null
   const moveLabel = info
-    ? `Move ${info.num}${info.side === 'w' ? '.' : '...'} ${info.san}`
+    ? `Move ${info.num}${info.side === 'w' ? '.' : '...'} ${info.san}${info.isBestLine ? ' ★' : ''}`
     : 'Starting position'
+
+  // ── Best line handlers ────────────────────────────────────────────────────
+
+  const handleShowBestLine = useCallback(async () => {
+    const positionFen = fenMap[ply - 1] || STARTING_FEN
+    setBestLineLoading(true)
+    try {
+      const r = await fetch('/api/analyze_position', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fen: positionFen, depth: 15, moves: 6 }),
+      })
+      const d = await r.json()
+      if (d.pv && d.pv.length > 0) {
+        setBestLine(d.pv)
+        setBestLineFromPly(ply)
+      }
+    } catch (e) {
+      console.error('Best line fetch failed:', e)
+    } finally {
+      setBestLineLoading(false)
+    }
+  }, [ply, fenMap])
+
+  const handleReturnToGame = useCallback(() => {
+    if (bestLineFromPly != null && ply >= bestLineFromPly) {
+      setPly(bestLineFromPly - 1)
+    }
+    setBestLine(null)
+    setBestLineFromPly(null)
+  }, [ply, bestLineFromPly])
 
   return (
     <div className="bm-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
@@ -299,6 +365,20 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
           </div>
           <div className="bm-hactions">
             <button className="bm-btn" onClick={() => setFlipped(f => !f)}>⇅ Flip</button>
+            {review && onMarkReviewed && (
+              <button
+                className={`bm-btn bm-reviewed-btn${isReviewed ? ' bm-reviewed-btn--done' : ''}`}
+                disabled={markingReviewed}
+                onClick={async () => {
+                  setMarkingReviewed(true)
+                  await onMarkReviewed(game.game_id, !isReviewed)
+                  setIsReviewed(v => !v)
+                  setMarkingReviewed(false)
+                }}
+              >
+                {isReviewed ? '✓ Reviewed' : 'Mark Reviewed'}
+              </button>
+            )}
             {game.game_id && (
               <a
                 className="bm-btn"
@@ -328,9 +408,11 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
             </div>
 
             <div className="bm-nav">
-              <button className="bm-nav-btn" onClick={() => setPly(0)} disabled={ply === 0} title="Start (Home)">⏮</button>
+              <button className="bm-nav-btn" onClick={() => setPly(0)} disabled={ply === 0} title="Start">⏮</button>
               <button className="bm-nav-btn" onClick={prev}           disabled={ply === 0} title="Previous (←)">◀</button>
-              <span className="bm-move-label">{moveLabel}</span>
+              <span className={`bm-move-label${bestLine && ply >= (bestLineFromPly ?? Infinity) ? ' bm-move-label--best' : ''}`}>
+                {moveLabel}
+              </span>
               <button className="bm-nav-btn" onClick={next}           disabled={ply >= maxPly} title="Next (→)">▶</button>
               <button className="bm-nav-btn" onClick={() => setPly(maxPly)} disabled={ply >= maxPly} title="End">⏭</button>
             </div>
@@ -339,13 +421,34 @@ export default function BoardModal({ game, username, evals, review, onClose }) {
           {/* Right panel */}
           <div className="bm-right">
             <div className="bm-moves-wrap">
-              <div className="bm-panel-title">MOVES</div>
+              <div className="bm-panel-title">
+                MOVES
+                {bestLine && <span className="bm-panel-best-badge"> · BEST LINE FROM MOVE {bestLineFromPly != null ? Math.ceil(bestLineFromPly / 2) : ''}</span>}
+              </div>
               <div className="ml-player-header">
                 <span className="ml-num-spacer" />
                 <span className="ml-player-white">{game.white}</span>
                 <span className="ml-player-black">{game.black}</span>
               </div>
-              <MoveList plies={plies} currentPly={ply} onSelect={setPly} />
+              <MoveList plies={displayPlies} currentPly={ply} onSelect={setPly} />
+
+              {/* Best line bar */}
+              <div className="bm-best-line-bar">
+                {!bestLine && ply > 0 && (
+                  <button
+                    className="bm-best-line-btn"
+                    onClick={handleShowBestLine}
+                    disabled={bestLineLoading}
+                  >
+                    {bestLineLoading ? '⟳ ANALYZING...' : '⚡ SHOW BEST LINE'}
+                  </button>
+                )}
+                {bestLine && (
+                  <button className="bm-return-btn" onClick={handleReturnToGame}>
+                    ↩ RETURN TO GAME
+                  </button>
+                )}
+              </div>
             </div>
 
             {review?.text_summary && (

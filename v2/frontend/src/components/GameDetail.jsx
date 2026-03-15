@@ -253,6 +253,7 @@ export default function GameDetail({ game, username, evals, review, onClose, onM
         username={username}
         evals={evals}
         review={review}
+        onMarkReviewed={onMarkReviewed}
         onClose={() => setShowBoard(false)}
       />
     )}

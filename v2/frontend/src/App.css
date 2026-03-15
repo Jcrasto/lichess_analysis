@@ -333,6 +333,35 @@ body {
 
 .btn-refresh:hover { background: #363636; border-color: #629924; color: #d9d9d9; }
 
+.btn-resync {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: #1a2e1a;
+  border: 1px solid #2d5c2d;
+  color: #5bc85b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+  text-transform: uppercase;
+}
+.btn-resync:hover { background: #223322; }
+
+.btn-resync--running {
+  border-color: #4a9a4a;
+  animation: resync-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes resync-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
 .btn-show-games {
   display: flex;
   align-items: center;
