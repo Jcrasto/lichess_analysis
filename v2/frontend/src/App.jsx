@@ -7,6 +7,7 @@ import EvalLogModal from './components/EvalLogModal.jsx'
 import Dashboard from './components/Dashboard.jsx'
 import ReviewQueue from './components/ReviewQueue.jsx'
 import SqlEditor from './components/SqlEditor.jsx'
+import ResyncModal from './components/ResyncModal.jsx'
 import './App.css'
 
 const EMPTY_FILTERS = {
@@ -38,7 +39,16 @@ export default function App() {
   const [noData, setNoData] = useState(false)
   const [showRefresh, setShowRefresh] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const evalPollRef = useRef(null)
+  const [showResync, setShowResync] = useState(false)
+  const evalPollRef   = useRef(null)
+  const resyncCancelRef = useRef(false)
+
+  // Resync orchestration state (lives here so it survives modal close/reopen)
+  const [resyncStarted, setResyncStarted] = useState(false)
+  const [resyncStep, setResyncStep]       = useState(0)
+  const [resyncError, setResyncError]     = useState(null)
+  const [resyncRefreshResult, setResyncRefreshResult] = useState(null)
+  const isResyncRunning = resyncStarted && resyncStep < 3 && !resyncError
   const [selectedGame, setSelectedGame] = useState(null)
   const [selectedGameEvals, setSelectedGameEvals] = useState(null)
   const [selectedGameReview, setSelectedGameReview] = useState(null)
@@ -173,7 +183,8 @@ export default function App() {
     const urlSinceDate  = urlParams.get('since_date') || ''
     const urlUntilDate  = urlParams.get('until_date') || ''
     const urlTab        = urlParams.get('tab')         || 'explorer'
-    const initialFilters = { ...EMPTY_FILTERS, since_date: urlSinceDate, until_date: urlUntilDate, opening: urlOpening }
+    const sixMonthsAgo = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10)
+    const initialFilters = { ...EMPTY_FILTERS, since_date: urlSinceDate || sixMonthsAgo, until_date: urlUntilDate, opening: urlOpening }
     if (urlTab !== 'explorer') setActiveTab(urlTab)
     setPendingFilters(initialFilters)
     setAppliedFilters(initialFilters)
@@ -229,6 +240,67 @@ export default function App() {
     setShowRefresh(false)
     fetchGames(defaultUser, 1, appliedFilters)
     fetchStatus(defaultUser)
+  }
+
+  const handleResyncStart = async (filters) => {
+    resyncCancelRef.current = false
+    setResyncStarted(true)
+    setResyncStep(0)
+    setResyncError(null)
+    setResyncRefreshResult(null)
+
+    const poll = async (url, isDone) => {
+      while (!resyncCancelRef.current) {
+        await new Promise(r => setTimeout(r, 2000))
+        if (resyncCancelRef.current) return
+        try { const d = await (await fetch(url)).json(); if (isDone(d)) return } catch {}
+      }
+    }
+
+    // Step 0: Incremental refresh
+    try {
+      const r = await fetch('/api/refresh/incremental', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: defaultUser }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.detail || 'Refresh failed')
+      if (resyncCancelRef.current) return
+      setResyncRefreshResult(d)
+    } catch (e) { setResyncError(`Refresh failed: ${e.message}`); return }
+
+    // Step 1: Evaluate
+    setResyncStep(1)
+    try {
+      const r = await fetch('/api/evaluate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: defaultUser, depth: 15, ...filters }),
+      })
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Evaluate failed') }
+      if (resyncCancelRef.current) return
+      await poll(`/api/evaluate/status/${defaultUser}`, s => !s.running)
+      if (resyncCancelRef.current) return
+    } catch (e) { setResyncError(`Evaluation failed: ${e.message}`); return }
+
+    // Step 2: Reviews
+    setResyncStep(2)
+    try {
+      const r = await fetch('/api/reviews/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: defaultUser, ...filters }),
+      })
+      if (!r.ok) { const d = await r.json(); throw new Error(d.detail || 'Reviews failed') }
+      if (resyncCancelRef.current) return
+      await poll(`/api/reviews/status/${defaultUser}`, s => !s.running)
+      if (resyncCancelRef.current) return
+    } catch (e) { setResyncError(`Review generation failed: ${e.message}`); return }
+
+    setResyncStep(3)
+    // Refresh app data on completion
+    fetchGames(defaultUser, 1, appliedFilters)
+    fetchStatus(defaultUser)
+    fetchEvalCount(defaultUser, appliedFilters)
+    setReviewsRefreshKey(k => k + 1)
   }
 
   const handleSettingsSave = (newUser, newHasToken) => {
@@ -543,6 +615,15 @@ export default function App() {
           </button>
         )}
 
+        {isResyncRunning ? (
+          <button className="btn-resync btn-resync--running" onClick={() => setShowResync(true)}>
+            <span>⟳</span> RESYNC RUNNING (step {resyncStep + 1}/3)
+          </button>
+        ) : (
+          <button className="btn-resync" onClick={() => setShowResync(true)}>
+            <span>⟳</span> RESYNC ALL
+          </button>
+        )}
         <button className="btn-refresh" onClick={() => setShowRefresh(true)}>
           <span>⟳</span> REFRESH DATA
         </button>
@@ -666,6 +747,19 @@ export default function App() {
           lastDate={lastDate}
           onClose={() => setShowRefresh(false)}
           onDone={handleRefreshDone}
+        />
+      )}
+
+      {showResync && (
+        <ResyncModal
+          username={defaultUser}
+          appliedFilters={appliedFilters}
+          started={resyncStarted}
+          currentStep={resyncStep}
+          error={resyncError}
+          refreshResult={resyncRefreshResult}
+          onStart={handleResyncStart}
+          onClose={() => setShowResync(false)}
         />
       )}
 

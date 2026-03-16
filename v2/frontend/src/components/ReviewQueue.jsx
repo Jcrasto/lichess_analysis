@@ -19,16 +19,17 @@ function PhaseBar({ label, blunders, pct }) {
 // ── Sortable reviews grid ─────────────────────────────────────────────────────
 
 const COLUMNS = [
-  { key: 'date',            label: 'Date',        sortable: true  },
-  { key: 'opponent',        label: 'Opponent',    sortable: false },
-  { key: 'result',          label: 'Result',      sortable: false },
-  { key: 'opening',         label: 'Opening',     sortable: false },
-  { key: 'blunder_count',   label: 'Blunders',    sortable: true  },
-  { key: 'mistake_count',   label: 'Mistakes',    sortable: true  },
-  { key: 'inaccuracy_count',label: 'Inaccuracies',sortable: true  },
-  { key: 'biggest_drop_cp', label: 'Biggest Drop',sortable: true  },
-  { key: 'critical_phase',  label: 'Phase',       sortable: false },
-  { key: 'is_reviewed',     label: 'Reviewed',    sortable: false },
+  { key: 'date',                      label: 'Date',        sortable: true  },
+  { key: 'opponent',                  label: 'Opponent',    sortable: false },
+  { key: 'result',                    label: 'Result',      sortable: false },
+  { key: 'opening',                   label: 'Opening',     sortable: false },
+  { key: 'blunder_count',             label: 'Blunders',    sortable: true  },
+  { key: 'mistake_count',             label: 'Mistakes',    sortable: true  },
+  { key: 'inaccuracy_count',          label: 'Inaccuracies',sortable: true  },
+  { key: 'biggest_win_pct_drop',      label: 'Biggest Drop',sortable: true  },
+  { key: 'lichess_accuracy_percentage', label: 'Accuracy',  sortable: true  },
+  { key: 'critical_phase',            label: 'Phase',       sortable: false },
+  { key: 'is_reviewed',               label: 'Reviewed',    sortable: false },
 ]
 
 function SortIcon({ active, dir }) {
@@ -80,12 +81,21 @@ function ReviewRow({ review, username, onSelect }) {
           : <span className="col-zero">0</span>}
       </td>
       <td className="col-num col-drop">
-        {review.biggest_drop_cp > 0
+        {review.biggest_win_pct_drop > 0
           ? <span className={
-              review.biggest_drop_cp > 300 ? 'drop-blunder'
-              : review.biggest_drop_cp > 150 ? 'drop-mistake'
+              review.biggest_win_pct_drop > 20 ? 'drop-blunder'
+              : review.biggest_win_pct_drop > 10 ? 'drop-mistake'
               : 'drop-inaccuracy'
-            }>⬇ {review.biggest_drop_cp}cp</span>
+            }>⬇ {review.biggest_win_pct_drop.toFixed(1)}%</span>
+          : <span className="col-zero">—</span>}
+      </td>
+      <td className="col-num col-accuracy">
+        {review.lichess_accuracy_percentage > 0
+          ? <span className={
+              review.lichess_accuracy_percentage >= 80 ? 'acc-great'
+              : review.lichess_accuracy_percentage >= 60 ? 'acc-ok'
+              : 'acc-poor'
+            }>{review.lichess_accuracy_percentage.toFixed(1)}%</span>
           : <span className="col-zero">—</span>}
       </td>
       <td className="col-phase">{review.critical_phase || '—'}</td>

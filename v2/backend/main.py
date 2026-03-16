@@ -582,6 +582,42 @@ async def stream_eval_logs(username: str, request: Request):
     )
 
 
+class AnalyzePositionRequest(BaseModel):
+    fen: str
+    depth: int = 15
+    moves: int = 6
+
+
+@app.post("/api/analyze_position")
+def analyze_position(req: AnalyzePositionRequest):
+    import chess
+    import chess.engine
+    from evaluator import get_stockfish_path
+
+    sf_path = get_stockfish_path()
+    if not sf_path:
+        raise HTTPException(status_code=503, detail="Stockfish not found")
+
+    try:
+        board = chess.Board(req.fen)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid FEN")
+
+    engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+    try:
+        info = engine.analyse(board, chess.engine.Limit(depth=min(req.depth, 20)))
+        pv = info.get("pv", [])
+        result = []
+        b = board.copy()
+        for move in pv[:req.moves]:
+            san = b.san(move)
+            b.push(move)
+            result.append({"san": san, "uci": move.uci(), "fen": b.fen()})
+        return {"pv": result}
+    finally:
+        engine.quit()
+
+
 # ── SQL Editor ────────────────────────────────────────
 
 class SqlQueryRequest(BaseModel):

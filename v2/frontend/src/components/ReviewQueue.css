@@ -464,6 +464,18 @@
   color: #f0c040;
 }
 
+.acc-great {
+  color: #7ed87e;
+}
+
+.acc-ok {
+  color: #c97820;
+}
+
+.acc-poor {
+  color: #e05050;
+}
+
 /* Generate button */
 .btn-generate {
   background: #2e5e2e;
