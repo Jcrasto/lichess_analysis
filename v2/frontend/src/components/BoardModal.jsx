@@ -284,7 +284,7 @@ export default function BoardModal({ game, username, evals, review, onMarkReview
   const currentFen = displayFenMap[ply] || STARTING_FEN
   const currentEvalEntry = (bestLine && bestLineFromPly != null && ply >= bestLineFromPly)
     ? null
-    : (evalMap[ply] || null)
+    : (ply > 0 ? (evalMap[ply - 1] ?? null) : null)
 
   // Story sections
   const { sections: storySections, dividers: storyDividers } = useMemo(
