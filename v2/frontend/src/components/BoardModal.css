@@ -486,3 +486,32 @@
   border-color: #2d5c2d;
   color: #5bc85b;
 }
+
+/* ── Eval bar wrapper + win percentage ────────────────────────────────────── */
+
+.eval-bar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  align-self: stretch;
+}
+
+.eval-bar-wrap .eval-bar {
+  flex: 1;
+}
+
+.bm-win-pct {
+  font-size: 9px;
+  font-family: monospace;
+  font-weight: 700;
+  color: #888;
+  width: 18px;
+  text-align: center;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+.bm-win-pct--empty { color: #555; }
+.bm-win-pct--good  { color: #7ed87e; }
+.bm-win-pct--bad   { color: #e05050; }
