@@ -284,7 +284,7 @@ export default function BoardModal({ game, username, evals, review, onMarkReview
   const currentFen = displayFenMap[ply] || STARTING_FEN
   const currentEvalEntry = (bestLine && bestLineFromPly != null && ply >= bestLineFromPly)
     ? null
-    : (evalMap[ply] || null)
+    : (ply > 0 ? (evalMap[ply] ?? null) : null)
 
   // Story sections
   const { sections: storySections, dividers: storyDividers } = useMemo(
@@ -312,6 +312,18 @@ export default function BoardModal({ game, username, evals, review, onMarkReview
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [prev, next, onClose])
+
+  const userWinPct = useMemo(() => {
+    if (currentEvalEntry?.mate_in != null) {
+      const whiteWin = currentEvalEntry.mate_in > 0 ? 99 : 1
+      return isUserWhite ? whiteWin : 100 - whiteWin
+    }
+    if (currentEvalEntry?.cp_score != null) {
+      const w = winPct(currentEvalEntry.cp_score)
+      return isUserWhite ? w : 100 - w
+    }
+    return null
+  }, [currentEvalEntry, isUserWhite])
 
   // Use displayPlies for the move label
   const info = ply > 0 ? displayPlies[ply - 1] : null
@@ -399,11 +411,16 @@ export default function BoardModal({ game, username, evals, review, onMarkReview
           {/* Board + nav */}
           <div className="bm-board-section">
             <div className="bm-board-row">
-              <EvalBar
-                cpScore={currentEvalEntry?.cp_score}
-                mateIn={currentEvalEntry?.mate_in}
-                flipped={flipped}
-              />
+              <div className="eval-bar-wrap">
+                <EvalBar
+                  cpScore={currentEvalEntry?.cp_score}
+                  mateIn={currentEvalEntry?.mate_in}
+                  flipped={flipped}
+                />
+                <span className={`bm-win-pct${userWinPct == null ? ' bm-win-pct--empty' : userWinPct >= 60 ? ' bm-win-pct--good' : userWinPct <= 40 ? ' bm-win-pct--bad' : ''}`}>
+                  {userWinPct != null ? `${Math.round(userWinPct)}%` : '—'}
+                </span>
+              </div>
               <Board fen={currentFen} flipped={flipped} />
             </div>
 
