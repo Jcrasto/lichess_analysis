@@ -452,8 +452,9 @@ async def _fetch_pgn(username: str, since_ms: Optional[int] = None) -> str:
         params["since"] = since_ms
 
     headers = {"Accept": "application/x-chess-pgn"}
+    timeout = httpx.Timeout(connect=30.0, read=600.0, write=None, pool=None)
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(
                 f"{LICHESS_API}/games/user/{username}",
                 params=params,
@@ -461,11 +462,13 @@ async def _fetch_pgn(username: str, since_ms: Optional[int] = None) -> str:
             )
         if resp.status_code == 404:
             raise HTTPException(status_code=404, detail=f"User '{username}' not found on Lichess")
+        if resp.status_code == 429:
+            raise HTTPException(status_code=429, detail="Lichess rate limit hit — please wait a minute and try again")
         if resp.status_code != 200:
             raise HTTPException(status_code=resp.status_code, detail=f"Lichess API error: {resp.text[:200]}")
         return resp.text
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Lichess API timed out")
+        raise HTTPException(status_code=504, detail="Lichess API timed out after 10 minutes — try again or check your connection")
     except httpx.RequestError as e:
         raise HTTPException(status_code=502, detail=f"Network error: {str(e)}")
 

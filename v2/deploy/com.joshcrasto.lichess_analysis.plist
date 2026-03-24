@@ -18,7 +18,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/joshcrasto/.local/bin/supervisord</string>
+        <string>/opt/homebrew/bin/supervisord</string>
         <string>--nodaemon</string>
         <string>--configuration</string>
         <string>/Users/joshcrasto/Projects/lichess_analysis/v2/deploy/supervisord.conf</string>

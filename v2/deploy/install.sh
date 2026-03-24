@@ -30,8 +30,8 @@ install_macos() {
     which supervisord >/dev/null 2>&1 || die "supervisord not found — run: brew install supervisor"
     SUPERVISORD=$(which supervisord)
 
-    # Patch the plist to use the actual supervisord path (in case it differs)
-    sed -i '' "s|/usr/local/bin/supervisord|$SUPERVISORD|g" "$PLIST"
+    # Patch the plist to use the actual supervisord path (handles any prior path)
+    sed -i '' "s|<string>[^<]*/supervisord</string>|<string>$SUPERVISORD</string>|" "$PLIST"
 
     mkdir -p "$LOGS" ~/Library/LaunchAgents
     [ -f "$PLIST" ] || die "Plist not found: $PLIST"
